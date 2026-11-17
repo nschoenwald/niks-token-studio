@@ -1,5 +1,9 @@
 # Changelog
 
+## 14.1.1
+
+- **Dynamic Token Ring preview fixed for worlds using the "Grid" fit mode:** the preview showed the art too small, with an empty gap inside the ring. Saved tokens were never affected; the preview now matches them.
+
 ## 14.1.0
 
 - **Undo works now.** Undo steps back through every change to the picture: moving, scaling and rotating layers, slider changes, brush strokes, removed colors, frames, fills and loaded images. Before, it often seemed to do nothing. Brush sizes, tool switches and other settings aren't undo steps.

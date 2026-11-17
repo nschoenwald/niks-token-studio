@@ -13,7 +13,6 @@ import { loadImage } from "./image-loader.mjs";
  * - Order from the bottom: background, ring, token art.
  */
 
-const DEFAULT_RING_THICKNESS = 0.1269848; // TokenRing.#defaultRingThickness
 const DEFAULT_SUBJECT_THICKNESS = 0.6666666; // TokenRing.#defaultSubjectThickness
 const WHITE = 0xFFFFFF;
 
@@ -153,7 +152,7 @@ function colorizeRing(canvas, color, band, mask) {
  * @param {number} options.gridSize         min(width, height) of the token in grid units.
  * @param {*} [options.ringColor]           The token's ring color (null for the default).
  * @param {*} [options.backgroundColor]     The token's ring background color (null for the default).
- * @returns {Promise<{canvas: HTMLCanvasElement, subjectScaleAdjustment: number}>}
+ * @returns {Promise<{canvas: HTMLCanvasElement}>}
  */
 export async function renderRing({ gridSize = 1, ringColor = null, backgroundColor = null } = {}) {
     const sheet = await loadSheet(CONFIG.Token.ring.spritesheet);
@@ -182,20 +181,20 @@ export async function renderRing({ gridSize = 1, ringColor = null, backgroundCol
         ctx.drawImage(bkg, 0, 0, out.width, out.height);
     }
     ctx.drawImage(ringCanvas, 0, 0);
-
-    const thickness = ring.frame.ringThickness ?? DEFAULT_RING_THICKNESS;
-    return { canvas: out, subjectScaleAdjustment: 1 / (thickness + DEFAULT_SUBJECT_THICKNESS) };
+    return { canvas: out };
 }
 
 /**
  * How large the ring is compared with the saved token image, which Token Studio saves at
- * `texture.scale = ring.subject.scale = padding × 2/3`, so the ring always covers one grid square.
- * @param {number} padding                  The padding factor (1 to 2).
- * @param {number} subjectScaleAdjustment   From `renderRing`.
+ * `texture.scale = ring.subject.scale = padding × 2/3`, so the ring always covers one grid square and the image
+ * shows at padding × 2/3 of it.
+ *
+ * Foundry's "grid" fit mode (core `dynamicTokenRingFitMode`) doesn't apply: it only shrinks the art of tokens without
+ * a distinct subject texture, and `TokenDocument#hasDistinctSubjectTexture` is true whenever
+ * `ring.subject.texture` is set, which Token Studio always does when saving.
+ * @param {number} padding  The padding factor (1 to 2).
  * @returns {number} Ring diameter ÷ canvas size.
  */
-export function ringToCanvasRatio(padding, subjectScaleAdjustment) {
-    // The art square shows at padding × 2/3 of a grid square; in "grid" fit mode Foundry shrinks it further
-    const gridFit = CONFIG.Token.ring.isGridFitMode ? subjectScaleAdjustment : 1;
-    return (1 / (padding * DEFAULT_SUBJECT_THICKNESS)) * gridFit;
+export function ringToCanvasRatio(padding) {
+    return 1 / (padding * DEFAULT_SUBJECT_THICKNESS);
 }

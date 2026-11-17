@@ -381,7 +381,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             return;
         }
 
-        const ratio = ringToCanvasRatio(this.uiState.dynamicRingScale || 1, preview.subjectScaleAdjustment);
+        const ratio = ringToCanvasRatio(this.uiState.dynamicRingScale || 1);
         const fit = Math.max(1, ratio);
         canvas.style.maxWidth = canvas.style.maxHeight = `${100 / fit}%`;
         container.classList.add("ring-mode");
