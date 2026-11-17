@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Nik's Token Studio frame "hostile". GPL-3.0-or-later, see LICENSE. -->
+  <defs>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffc2b8"/>
+      <stop offset="0.45" stop-color="#c0392b"/>
+      <stop offset="0.55" stop-color="#5e1610"/>
+      <stop offset="1" stop-color="#c0392b"/>
+    </linearGradient>
+    <radialGradient id="shade" cx="256" cy="256" r="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0.86" stop-color="#000" stop-opacity="0.45"/>
+      <stop offset="0.92" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.35"/>
+    </radialGradient>
+  </defs>
+  <path fill-rule="evenodd" fill="url(#metal)" d="M256 2a254 254 0 1 0 0.01 0Z M256 30a226 226 0 1 1 -0.01 0Z"/>
+  <path fill-rule="evenodd" fill="url(#shade)" d="M256 2a254 254 0 1 0 0.01 0Z M256 30a226 226 0 1 1 -0.01 0Z"/>
+  <circle cx="256" cy="256" r="241" fill="none" stroke="#5e1610" stroke-width="10" opacity="0.55"/>
+  <line x1="256.0" y1="25.0" x2="256.0" y2="5.0" stroke="#ffe9e4" stroke-width="5" stroke-linecap="round" opacity="0.95"/><line x1="371.5" y1="55.9" x2="381.5" y2="38.6" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="456.1" y1="140.5" x2="473.4" y2="130.5" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="487.0" y1="256.0" x2="507.0" y2="256.0" stroke="#ffe9e4" stroke-width="5" stroke-linecap="round" opacity="0.95"/><line x1="456.1" y1="371.5" x2="473.4" y2="381.5" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="371.5" y1="456.1" x2="381.5" y2="473.4" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="256.0" y1="487.0" x2="256.0" y2="507.0" stroke="#ffe9e4" stroke-width="5" stroke-linecap="round" opacity="0.95"/><line x1="140.5" y1="456.1" x2="130.5" y2="473.4" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="55.9" y1="371.5" x2="38.6" y2="381.5" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="25.0" y1="256.0" x2="5.0" y2="256.0" stroke="#ffe9e4" stroke-width="5" stroke-linecap="round" opacity="0.95"/><line x1="55.9" y1="140.5" x2="38.6" y2="130.5" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/><line x1="140.5" y1="55.9" x2="130.5" y2="38.6" stroke="#ffe9e4" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
+  <circle cx="256" cy="256" r="253" fill="none" stroke="#000" stroke-width="2" opacity="0.6"/>
+  <circle cx="256" cy="256" r="226.5" fill="none" stroke="#000" stroke-width="2.5" opacity="0.7"/>
+  <circle cx="256" cy="256" r="229" fill="none" stroke="#ffc2b8" stroke-width="1.5" opacity="0.7"/>
+</svg>

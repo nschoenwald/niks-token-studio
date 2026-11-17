@@ -1,0 +1,829 @@
+/* ----------------------------------------- */
+/*  Window & Layout                          */
+/* ----------------------------------------- */
+
+.niks-token-studio {
+    --nts-bg: #1a1a1a;
+    --nts-bg-dark: #121212;
+    --nts-bg-panel: #252525;
+    --nts-text: #eee;
+    --nts-text-muted: #888;
+    --nts-accent: #ff6400;
+    --nts-accent-hover: #ff7d29;
+    --nts-accent-rgb: 255, 100, 0;
+    --nts-border: #333;
+    --nts-spacing: 12px;
+    
+    background: var(--nts-bg);
+    color: var(--nts-text);
+    font-family: "Roboto", sans-serif;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    height: auto; /* Allow shrink-wrap */
+    max-height: 100%;
+    overflow: hidden;
+}
+
+.niks-token-studio .window-content {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--nts-bg);
+    color: var(--nts-text);
+}
+
+.niks-token-studio .niks-token-studio-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ----------------------------------------- */
+/*  Header                                   */
+/* ----------------------------------------- */
+.niks-token-studio .app-header {
+    background: #111;
+    color: #fff;
+    padding: 10px 15px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--nts-border);
+    flex-shrink: 0;
+}
+
+.niks-token-studio .app-header h1 {
+    font-size: 16px;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    font-weight: 700;
+}
+
+.niks-token-studio .header-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.niks-token-studio .header-actions button {
+    background: #333;
+    border: 1px solid #555;
+    color: #eee;
+    border-radius: 4px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+}
+.niks-token-studio .header-actions button:hover {
+    background: var(--nts-accent);
+    border-color: var(--nts-accent);
+    color: #fff;
+}
+
+.niks-token-studio .studio-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden; /* Prevent body scroll, use inner scroll */
+}
+
+/* ----------------------------------------- */
+/*  Single Large View Preview Stage          */
+/* ----------------------------------------- */
+
+.niks-token-studio .preview-stage {
+    flex: 1; /* Take remaining width */
+    background: #111;
+    position: relative;
+    display: flex;
+    flex-direction: column; /* Toggle Top, Canvas Bottom */
+    overflow: hidden;
+    height: 100%; /* Ensure it fills parent */
+    border-right: 1px solid var(--nts-border);
+}
+
+/* View Switcher (Top Bar) */
+.niks-token-studio .view-controls {
+    flex: 0 0 40px; /* Slimmer top bar */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.3);
+    border-bottom: 1px solid var(--nts-border);
+    z-index: 10;
+}
+
+.niks-token-studio .view-toggle {
+    display: flex;
+    background: #222;
+    padding: 2px;
+    border-radius: 16px;
+    border: 1px solid #444;
+}
+
+.niks-token-studio .view-toggle button {
+    background: transparent;
+    border: none;
+    color: #888;
+    padding: 4px 12px;
+    border-radius: 14px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.niks-token-studio .view-toggle button.active {
+    background: var(--nts-accent);
+    color: #fff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+.niks-token-studio .view-toggle button:hover:not(.active) {
+    color: #ccc;
+}
+
+/* Canvas Stage */
+.niks-token-studio .view-options {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px var(--nts-spacing);
+}
+.niks-token-studio .view-options.hidden { display: none; }
+.niks-token-studio .view-options label { color: var(--nts-text-muted); }
+.niks-token-studio .view-options select { width: auto; flex: 0 0 auto; }
+.niks-token-studio .view-options .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.niks-token-studio .canvas-stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+    background-image: 
+        linear-gradient(45deg, #1a1a1a 25%, transparent 25%), 
+        linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), 
+        linear-gradient(45deg, transparent 75%, #1a1a1a 75%), 
+        linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+}
+
+.niks-token-studio .canvas-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px; /* Dead zone padding */
+    box-sizing: border-box;
+}
+.niks-token-studio .canvas-container.hidden { display: none; }
+
+.niks-token-studio .canvas-container canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    box-shadow: 0 0 50px rgba(0,0,0,0.8); /* Shadow acts as border */
+}
+
+
+/* Empty State */
+.niks-token-studio .empty-state {
+    position: absolute;
+    top: 50px; /* Below header */
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.8);
+    z-index: 20;
+    pointer-events: none; /* Let clicks pass through to container */
+}
+.niks-token-studio .drop-message {
+    text-align: center;
+    color: var(--nts-text-muted);
+}
+.niks-token-studio .drop-message i { font-size: 48px; margin-bottom: 15px; display: block; opacity: 0.5; }
+.niks-token-studio .drop-message p { margin: 0; font-size: 16px; }
+
+/* Floating Fit Button */
+.niks-token-studio .floating-btn {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--nts-bg-panel);
+    border: 1px solid var(--nts-border);
+    color: var(--nts-text);
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.4);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.2s;
+}
+.niks-token-studio .floating-btn:hover {
+    background: var(--nts-accent);
+    color: #fff;
+    border-color: var(--nts-accent);
+    transform: scale(1.1);
+}
+
+/* Right Column: Controls */
+.niks-token-studio .controls-column {
+    flex: 0 0 320px; /* Fixed width sidebar */
+    display: flex;
+    flex-direction: column;
+    background: var(--nts-bg-panel);
+    border-left: 1px solid var(--nts-border);
+}
+
+/* Tabs */
+.niks-token-studio .tabs-nav {
+    display: flex;
+    background: rgba(0,0,0,0.2);
+    border-bottom: 1px solid var(--nts-border);
+    flex-shrink: 0;
+}
+
+.niks-token-studio .tabs-nav .item {
+    flex: 1;
+    text-align: center;
+    padding: 10px 0;
+    cursor: pointer;
+    color: var(--nts-text-muted);
+    font-size: 11px;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.niks-token-studio .tabs-nav .item:hover { color: var(--nts-text); background: rgba(255,255,255,0.02); }
+.niks-token-studio .tabs-nav .item.active {
+    color: var(--nts-accent);
+    border-bottom-color: var(--nts-accent);
+}
+.niks-token-studio .tabs-nav .item i { margin-right: 6px; }
+
+.niks-token-studio .tab-content {
+    background: var(--nts-bg);
+    flex: 1; /* Take remaining height */
+    overflow-y: auto; /* Scrollable content */
+    padding: 0; 
+}
+.niks-token-studio .tab-content::-webkit-scrollbar { width: 6px; background: transparent; }
+.niks-token-studio .tab-content::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+.niks-token-studio .tab {
+    display: none;
+    padding: var(--nts-spacing);
+}
+.niks-token-studio .tab.active { display: block; }
+
+/* Control Groups */
+.niks-token-studio .control-group {
+    margin-bottom: 10px;
+}
+.niks-token-studio .control-group:last-child { margin-bottom: 0; }
+
+.niks-token-studio .control-group.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+    filter: grayscale(1);
+}
+
+.niks-token-studio .control-group label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--nts-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Inputs & Sliders */
+.niks-token-studio input[type="range"] {
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none; 
+    background: transparent;
+    margin: 0;
+}
+.niks-token-studio input[type="range"]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    background: #444;
+    border-radius: 2px;
+}
+.niks-token-studio input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 14px;
+    width: 14px;
+    border-radius: 50%;
+    background: var(--nts-text);
+    margin-top: -5px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    transition: transform 0.1s;
+}
+.niks-token-studio input[type="range"]:active::-webkit-slider-thumb {
+    background: var(--nts-accent);
+    transform: scale(1.1);
+}
+
+.niks-token-studio .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+.niks-token-studio .slider-row.full-width {
+    padding: 5px 0;
+}
+
+/* Numeric Value Input */
+.niks-token-studio .val-input {
+    width: 50px;
+    text-align: right;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--nts-accent);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 2px 4px;
+    transition: all 0.2s;
+}
+.niks-token-studio .val-input:hover {
+    border-color: #444;
+    background: rgba(0,0,0,0.2);
+}
+.niks-token-studio .val-input:focus {
+    border-color: var(--nts-accent);
+    background: #000;
+    color: #fff;
+    outline: none;
+}
+/* Hide arrows in number input */
+.niks-token-studio .val-input::-webkit-outer-spin-button,
+.niks-token-studio .val-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* Labels containing inputs (header like) */
+.niks-token-studio .control-group label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--nts-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.niks-token-studio .small-icon { color: #666; font-size: 10px; }
+
+/* Info Tip (Replacement for Sliders) */
+.niks-token-studio .info-tip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--nts-text-muted);
+    margin-top: 15px;
+    padding: 8px;
+    border: 1px dashed var(--nts-border);
+    border-radius: 6px;
+    opacity: 0.7;
+}
+.niks-token-studio .info-tip i { font-size: 12px; }
+.niks-token-studio .info-tip small { font-size: 11px; }
+
+/* FX Grid (Compact Style Tab) */
+.niks-token-studio .fx-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    margin-bottom: 10px;
+    align-items: end;
+}
+
+.niks-token-studio .color-row {
+    display: flex;
+    gap: 8px;
+}
+.niks-token-studio .color-row color-picker {
+    flex: 1;
+    height: 28px;
+}
+
+/* Frame Selector */
+.niks-token-studio .frame-selector {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+.niks-token-studio .frame-selector::-webkit-scrollbar { height: 2px; }
+.niks-token-studio .frame-selector::-webkit-scrollbar-thumb { background: #444; }
+
+.niks-token-studio .frame-item {
+    flex: 0 0 40px;
+    height: 40px;
+    border-radius: 50%; /* Circle frames look better in selector */
+    border: 2px solid var(--nts-border);
+    cursor: pointer;
+    overflow: hidden;
+    transition: all 0.2s;
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.niks-token-studio .frame-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.niks-token-studio .frame-item.remove-frame {
+    border: 1px dashed var(--nts-border);
+    color: var(--nts-text-muted);
+}
+.niks-token-studio .frame-item.remove-frame:hover {
+    color: #ff4444; /* Red for remove */
+    border-color: #ff4444;
+}
+
+.niks-token-studio .frame-item.trash-can {
+    border: 1px dashed var(--nts-border);
+    color: var(--nts-text-muted);
+}
+.niks-token-studio .frame-item.trash-can.drag-hover {
+    background: rgba(255, 0, 0, 0.2);
+    border-color: #f00;
+    color: #f00;
+    transform: scale(1.1);
+}
+
+.niks-token-studio .frame-item.active {
+    border-color: var(--nts-accent);
+    box-shadow: 0 0 0 2px rgba(255,100,0,0.3);
+    transform: scale(1.05);
+}
+.niks-token-studio .frame-item:hover { border-color: #666; }
+
+.niks-token-studio .add-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--nts-bg-panel);
+    color: var(--nts-text-muted);
+    border-radius: 50%;
+}
+.niks-token-studio .add-frame:hover { color: var(--nts-text); }
+
+
+
+.niks-token-studio .export-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.niks-token-studio .action-card {
+    display: block;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    padding: 0;
+    width: 100%;
+    text-align: left;
+    transition: transform 0.1s;
+}
+.niks-token-studio .action-card:active {
+    transform: scale(0.98);
+}
+
+.niks-token-studio .card-content {
+    background: transparent;
+    border: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    height: 100%;
+}
+
+.niks-token-studio .btn-visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 8px; /* Compact padding */
+    background: var(--nts-bg-panel);
+    border: 1px solid var(--nts-accent);
+    border-radius: 4px;
+    transition: all 0.2s;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+.niks-token-studio .action-card:hover .btn-visual {
+    background: var(--nts-accent);
+    color: #fff;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255,100,0,0.3);
+}
+
+.niks-token-studio .btn-visual i { 
+    font-size: 16px; 
+    color: var(--nts-accent);
+    margin: 0;
+    transition: color 0.2s; 
+}
+.niks-token-studio .action-card:hover .btn-visual i { color: #fff; }
+
+.niks-token-studio .btn-visual span { 
+    font-weight: 700; 
+    font-size: 12px; 
+    color: var(--nts-text); 
+    text-transform: uppercase;
+}
+.niks-token-studio .action-card:hover .btn-visual span { color: #fff; }
+
+
+/* Save Button */
+.niks-token-studio .save-btn {
+    width: 100%;
+    padding: 10px;
+    background: var(--nts-accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: background 0.2s;
+}
+.niks-token-studio .save-btn:hover { background: var(--nts-accent-hover); }
+
+/* Checkbox Label */
+.niks-token-studio .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--nts-text);
+}
+
+/* Slot UI */
+.niks-token-studio .slot-group {
+    border: 1px solid var(--nts-border);
+    background: rgba(0,0,0,0.2);
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.niks-token-studio .slot-group.active-slot {
+    border-color: var(--nts-accent);
+    background: rgba(var(--nts-accent-rgb), 0.05);
+}
+
+.niks-token-studio .slot-header {
+    padding: 0.5rem;
+    background: rgba(0,0,0,0.3);
+    cursor: pointer;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    user-select: none;
+}
+.niks-token-studio .slot-header:hover {
+    background: rgba(255,255,255,0.05);
+}
+
+.niks-token-studio .slot-group.disabled,
+.niks-token-studio .btn-layer.disabled {
+    pointer-events: none;
+    opacity: 0.5;
+    filter: grayscale(1);
+    text-decoration: line-through;
+}
+
+.niks-token-studio .slot-header input[type="radio"] {
+    margin: 0;
+}
+
+.niks-token-studio .slot-content {
+    padding: 0.5rem;
+    border-top: 1px solid var(--nts-border);
+}
+
+.niks-token-studio .slot-group.active-slot .slot-content {
+    display: block;
+}
+
+.niks-token-studio button[data-action="toggle-popout"].active {
+    background: var(--nts-accent);
+    color: white;
+    border-color: var(--nts-accent-hover);
+    box-shadow: 0 0 10px var(--nts-accent);
+    animation: niks-token-studio-pulse 1.5s infinite;
+}
+
+@keyframes niks-token-studio-pulse {
+    0% { box-shadow: 0 0 5px var(--nts-accent); }
+    50% { box-shadow: 0 0 15px var(--nts-accent); }
+    100% { box-shadow: 0 0 5px var(--nts-accent); }
+}
+
+/* ----------------------------------------- */
+/*  New Tool Layout (Side-by-Side)           */
+/* ----------------------------------------- */
+
+.niks-token-studio .tools-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.niks-token-studio .tool-card {
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--nts-border);
+    border-radius: 6px;
+    overflow: hidden;
+    transition: all 0.2s;
+}
+.niks-token-studio .tool-card.active {
+    border-color: var(--nts-accent);
+    background: rgba(var(--nts-accent-rgb), 0.05);
+}
+
+.niks-token-studio .tool-header {
+    padding: 8px;
+    background: rgba(0,0,0,0.3);
+    border-bottom: 1px solid var(--nts-border);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--nts-text-muted);
+}
+.niks-token-studio .tool-card.active .tool-header {
+    color: var(--nts-accent);
+    border-bottom-color: var(--nts-accent);
+}
+
+.niks-token-studio .tool-toggle {
+    background: #333;
+    border: none;
+    color: #888;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+}
+.niks-token-studio .tool-toggle.active {
+    background: var(--nts-accent);
+    color: #fff;
+}
+
+.niks-token-studio .tool-body {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.niks-token-studio .tool-body.disabled {
+    opacity: 0.3;
+    pointer-events: none;
+    filter: grayscale(1);
+}
+
+.niks-token-studio .mode-switch {
+    display: flex;
+    background: #111;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #333;
+}
+
+.niks-token-studio .mode-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #666;
+    padding: 6px 0;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 10px;
+}
+.niks-token-studio .mode-btn:hover { background: #222; color: #fff; }
+.niks-token-studio .mode-btn.active {
+    background: #444;
+    color: #fff;
+    box-shadow: inset 0 0 4px rgba(0,0,0,0.5);
+}
+.niks-token-studio .mode-btn i { font-size: 12px; }
+
+.niks-token-studio .btn-xs {
+    padding: 4px;
+    font-size: 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+.niks-token-studio .btn-xs.danger {
+    background: rgba(255, 0, 0, 0.1);
+    color: #ff6666;
+    border-color: #500;
+}
+.niks-token-studio .btn-xs.danger:hover {
+    background: rgba(255, 0, 0, 0.3);
+    color: #ffaaaa;
+}
+
+
+/* Layer Selector (Style Tab) */
+.niks-token-studio .btn-group-row {
+    display: flex;
+    background: #111;
+    border-radius: 4px;
+    border: 1px solid #333;
+    overflow: hidden;
+    margin-top: 5px;
+}
+
+.niks-token-studio .btn-layer {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #666;
+    padding: 8px 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-right: 1px solid #222;
+}
+.niks-token-studio .btn-layer:last-child { border-right: none; }
+
+.niks-token-studio .btn-layer:hover {
+    background: #222;
+    color: #eee;
+}
+
+.niks-token-studio .btn-layer.active {
+    background: #444;
+    color: #fff;
+    box-shadow: inset 0 0 6px rgba(0,0,0,0.5);
+}
+.niks-token-studio .btn-layer i {
+    font-size: 10px;
+}
