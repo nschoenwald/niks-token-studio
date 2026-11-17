@@ -26,7 +26,7 @@ const UNDO_BYTE_BUDGET = 512 * 1024 * 1024;
 const UNDOABLE_HANDLERS = new Set([
     "_onAutoFit", "_onRemoveFrame", "_onSelectFrame", "_onDeleteBackground", "_onRemoveBackgroundColor",
     "_onApplyChroma", "_onClearPaint", "_onClearPopout", "_onChangeAvatarRatio", "_onChangeRingScale",
-    "_onToggleFoundryRing"
+    "_onToggleFoundryRing", "_onPopOutPreset"
 ]);
 
 /** Slider names that change the picture (brush sizes and tolerance are tool settings). */
@@ -1150,14 +1150,24 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             ctx.clip();
             
             // Draw Character
-             if (state.fx.shadowBlur > 0) {
-                 ctx.shadowColor = state.fx.shadowColor;
-                 ctx.shadowBlur = state.fx.shadowBlur;
-             }
-             ctx.translate(canvasSize/2 + state.transforms.x, canvasSize/2 + state.transforms.y);
-             ctx.rotate((state.transforms.rotation * Math.PI) / 180);
-             ctx.scale(state.transforms.scale, state.transforms.scale);
-             this._drawLayerBuffer(ctx, this.tokenBuffer);
+            const breaksOut = this.popOutBuffer && this.uiState.hasPopOutContent;
+            if (breaksOut) {
+                // Leave out the Break Out areas: step 4 draws them over the frame, and drawing them twice would
+                // darken soft edges and the shadow (a visible seam along a preset's edge)
+                const artC = document.createElement("canvas");
+                artC.width = canvasSize;
+                artC.height = canvasSize;
+                const artCtx = artC.getContext("2d");
+                this._drawCharacter(artCtx, state, canvasSize);
+                if ((this.popOutBuffer.width !== canvasSize) || (this.popOutBuffer.height !== canvasSize)) {
+                    this.popOutBuffer.width = canvasSize;
+                    this.popOutBuffer.height = canvasSize;
+                }
+                artCtx.globalCompositeOperation = "destination-out";
+                artCtx.drawImage(this.popOutBuffer, 0, 0);
+                ctx.drawImage(artC, 0, 0);
+            }
+            else this._drawCharacter(ctx, state, canvasSize);
             
             ctx.restore();
         }
@@ -1258,6 +1268,57 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
 
         ctx.restore();
+    }
+
+    /**
+     * Draw the art layer with its shadow and transforms, centred on the token canvas.
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {object} state      `uiState.token`
+     * @param {number} canvasSize
+     */
+    _drawCharacter(ctx, state, canvasSize) {
+        ctx.save();
+        if (state.fx.shadowBlur > 0) {
+            ctx.shadowColor = state.fx.shadowColor;
+            ctx.shadowBlur = state.fx.shadowBlur;
+        }
+        ctx.translate(canvasSize/2 + state.transforms.x, canvasSize/2 + state.transforms.y);
+        ctx.rotate((state.transforms.rotation * Math.PI) / 180);
+        ctx.scale(state.transforms.scale, state.transforms.scale);
+        this._drawLayerBuffer(ctx, this.tokenBuffer);
+        ctx.restore();
+    }
+
+    /**
+     * Fill the Break Out mask with a preset area, replacing what was painted. Refine it with the brush afterwards.
+     * - top: everything above the frame's centre line
+     * - bottom: everything below it
+     * - all: the whole image
+     * @param {Event} event
+     * @param {HTMLElement} target  Carries `data-preset`.
+     */
+    _onPopOutPreset(event, target) {
+        if (!this.popOutBuffer) return ui.notifications.warn(loc("NoImageForLayer"));
+        const ringScale = this.uiState.dynamicRingScale || 1.0;
+        const canvasSize = Math.round(this.resolution * ringScale);
+        const buffer = this._editBuffer("popOutBuffer");
+        if ((buffer.width !== canvasSize) || (buffer.height !== canvasSize)) {
+            buffer.width = canvasSize;
+            buffer.height = canvasSize;
+        }
+        const ctx = buffer.getContext("2d");
+        ctx.clearRect(0, 0, canvasSize, canvasSize);
+        ctx.fillStyle = "#ffffff";
+        const cy = (canvasSize / 2) + this.uiState.token.frame.transforms.y;
+        const centre = Math.min(Math.max(Math.round(cy), 0), canvasSize);
+        switch (target.dataset.preset) {
+            case "top": ctx.fillRect(0, 0, canvasSize, centre); break;
+            case "bottom": ctx.fillRect(0, centre, canvasSize, canvasSize - centre); break;
+            case "all": ctx.fillRect(0, 0, canvasSize, canvasSize); break;
+            default: return;
+        }
+        this.uiState.hasPopOutContent = true;
+        this.drawTokenSandwich();
     }
 
     drawToken() {

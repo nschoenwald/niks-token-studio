@@ -43,7 +43,7 @@ Open an actor's sheet, click the **⋮** button in the window header and choose 
 ### Brushes and Effects
 
 - **Eraser:** erases parts of the selected layer, or brings erased parts back.
-- **Break Out:** paint over parts of the art (a sword, a wing, a hat) to draw them on top of the frame.
+- **Break Out:** paint over parts of the art (a sword, a wing, a hat) to draw them on top of the frame. Presets fill the area in one click: **Top** (everything above the middle of the frame), **Bottom** or **Everything**; refine it with the brush afterwards.
 - **Paint:** paints color inside the frame.
 - **Remove a Color:** removes one color from the selected layer, for green-screen art or plain backgrounds. **Tolerance** sets how close a color has to be.
 - **Shadow:** a colored, softened shadow behind the art.

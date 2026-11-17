@@ -1,5 +1,11 @@
 # Changelog
 
+## 14.2.0
+
+- **Break Out presets:** three buttons in the Break Out tool fill the Break Out area in one click: **Top** (everything above the middle of the frame breaks out: heads, hats, horns), **Bottom** (feet, tails) and **Everything** (the whole figure sits over the frame). A preset replaces what you painted; refine it with the brush afterwards. Works best with cut-out art. Each preset can be undone.
+- **Cleaner Break Out edges:** areas that break out were drawn twice inside the frame, which made soft edges and the shadow darker there. They're drawn once now.
+- **Header icons are back with Carolingian UI:** the Undo, Redo, Save Portrait and Save Token buttons lost their icons when the Carolingian UI module was active.
+
 ## 14.1.1
 
 - **Dynamic Token Ring preview fixed for worlds using the "Grid" fit mode:** the preview showed the art too small, with an empty gap inside the ring. Saved tokens were never affected; the preview now matches them.

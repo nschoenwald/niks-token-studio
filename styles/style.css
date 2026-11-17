@@ -44,7 +44,7 @@
 /* ----------------------------------------- */
 /*  Header                                   */
 /* ----------------------------------------- */
-.niks-token-studio .app-header {
+.niks-token-studio .nts-app-header {
     background: #111;
     color: #fff;
     padding: 10px 15px;
@@ -55,7 +55,7 @@
     flex-shrink: 0;
 }
 
-.niks-token-studio .app-header h1 {
+.niks-token-studio .nts-app-header h1 {
     font-size: 16px;
     margin: 0;
     display: flex;
@@ -65,12 +65,12 @@
     font-weight: 700;
 }
 
-.niks-token-studio .header-actions {
+.niks-token-studio .nts-header-actions {
     display: flex;
     gap: 10px;
 }
 
-.niks-token-studio .header-actions button {
+.niks-token-studio .nts-header-actions button {
     background: #333;
     border: 1px solid #555;
     color: #eee;
@@ -83,13 +83,13 @@
     gap: 6px;
     transition: all 0.2s;
 }
-.niks-token-studio .header-actions button:hover {
+.niks-token-studio .nts-header-actions button:hover {
     background: var(--nts-accent);
     border-color: var(--nts-accent);
     color: #fff;
 }
 
-.niks-token-studio .header-actions button.icon-button {
+.niks-token-studio .nts-header-actions button.icon-button {
     flex: 0 0 auto;
     min-width: 32px;
     height: 28px;
@@ -97,11 +97,11 @@
     justify-content: center;
     line-height: 1;
 }
-.niks-token-studio .header-actions button.icon-button i {
+.niks-token-studio .nts-header-actions button.icon-button i {
     margin: 0;
     font-size: 13px;
 }
-.niks-token-studio .header-actions button:disabled {
+.niks-token-studio .nts-header-actions button:disabled {
     opacity: 0.4;
     cursor: default;
     background: #333;
@@ -786,6 +786,26 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+.niks-token-studio .nts-preset-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.niks-token-studio .nts-preset-row .nts-preset-label {
+    flex: 1;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--nts-text-muted);
+}
+.niks-token-studio .nts-preset-row .mode-btn {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 22px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .niks-token-studio .tool-body.disabled {
     opacity: 0.3;
