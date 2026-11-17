@@ -27,12 +27,12 @@ Open an actor's sheet, click the **⋮** button in the window header and choose 
 
 ### Token
 
-- **Three layers:** the frame on top, the art in the middle and an optional background image at the bottom. Pick a layer and set its size, position and rotation with the sliders, drag it on the preview, or scale it with the mouse wheel.
+- **Three layers:** the frame on top, the art in the middle and an optional background image at the bottom. Pick a layer and set its size, position and rotation with the sliders, drag it on the preview, or zoom it with the mouse wheel, by scrolling on a trackpad or by pinching. Zooming keeps the spot under the mouse in place.
 - **Frames:** three frames come with the module (friendly, hostile and neutral). Add your own image from your files, or choose **No Frame**. To take a frame off the list, drag it onto the trash can. Frames you add stay in the list while the window is open. To always start with one of them, set it as **Default Frame** in the module settings.
 - **Fill:** a solid color behind the art, inside the frame.
 - **Padding:** makes the saved image larger than one grid square (up to 200 %), so art that breaks out of the frame isn't cut off.
-- **Dynamic Token Ring:** saves the token without a frame and turns on Foundry's Dynamic Token Ring for it. A dashed circle shows where the ring will sit.
-- **Save Token** updates the actor's prototype token and its tokens on the scene you're viewing.
+- **Dynamic Token Ring:** saves the token without a frame and turns on Foundry's Dynamic Token Ring for it. The preview shows the actual ring: the style chosen in Foundry's settings, the ring for the token's size, and the token's ring and background colors (animations aren't shown).
+- **Save Token** updates the actor's prototype token and its tokens on the scene you're viewing, and shows the file the token was saved to.
 - **Where tokens are saved:** next to the actor's portrait, named after it with a running number: a portrait `Goblin Boss.webp` gets `Goblin Boss-token-1.webp`, then `Goblin Boss-token-2.webp`. This works for portraits in your user data and on S3. When the portrait's folder can't be used (Foundry's own icons, a system or module folder, another website, a pasted image), the token goes into the storage folder instead, named after the actor. You can also always save to the storage folder with the **Token Location** setting.
 
 ### Portrait
@@ -47,13 +47,15 @@ Open an actor's sheet, click the **⋮** button in the window header and choose 
 - **Paint:** paints color inside the frame.
 - **Remove a Color:** removes one color from the selected layer, for green-screen art or plain backgrounds. **Tolerance** sets how close a color has to be.
 - **Shadow:** a colored, softened shadow behind the art.
-- **Undo** steps back through your changes.
+- **Brush preview:** while a brush is on, a ring under the mouse shows where and how big it paints (dashed when it takes something away).
+- **Undo and Redo** step through your changes to the picture (layer positions, sliders, brush strokes, frames, fills, loaded images). Shortcuts: Ctrl+Z to undo, Ctrl+Shift+Z or Ctrl+Y to redo (Cmd on Mac), while Token Studio is the active window.
 
 ### Images
 
 - Drop an image onto the window, paste one from the clipboard, or browse your files. The actor's current image is loaded when you open Token Studio.
+- Very large images are scaled down when they're loaded, to at most 4 times the token resolution on the longer side (2048 px at the default 512 px). That's twice the largest token Token Studio saves, so the editor stays fast while zooming in still looks sharp.
 - Images from S3 or another file host work as long as that host allows cross-origin (CORS) requests from your Foundry server. If it doesn't, Token Studio tells you which host refused the image.
-- Your work in progress (positions, erased areas, painted areas) is kept per actor and comes back the next time you open Token Studio for that actor.
+- Your work in progress (positions, erased areas, painted areas) is kept per actor and comes back the next time you open Token Studio for that actor. If the actor's portrait was changed outside Token Studio in the meantime, Token Studio starts from the new portrait and keeps only your frame, background, fill and shadow.
 
 ## Settings
 

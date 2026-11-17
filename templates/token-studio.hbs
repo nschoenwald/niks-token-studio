@@ -4,8 +4,11 @@
     <header class="app-header">
         <h1><i class="fas fa-user-circle"></i> {{localize 'niks-token-studio.Title'}}</h1>
         <div class="header-actions">
-            <button type="button" data-action="undo" title="{{localize 'niks-token-studio.Undo'}}">
-                <i class="fas fa-undo"></i>
+            <button type="button" class="icon-button" data-action="undo" data-tooltip="{{localize 'niks-token-studio.Undo'}} (Ctrl+Z)" aria-label="{{localize 'niks-token-studio.Undo'}}" {{#unless canUndo}}disabled{{/unless}}>
+                <i class="fa-solid fa-rotate-left" inert></i>
+            </button>
+            <button type="button" class="icon-button" data-action="redo" data-tooltip="{{localize 'niks-token-studio.Redo'}} (Ctrl+Shift+Z)" aria-label="{{localize 'niks-token-studio.Redo'}}" {{#unless canRedo}}disabled{{/unless}}>
+                <i class="fa-solid fa-rotate-right" inert></i>
             </button>
             <button type="button" data-action="saveAvatar" title="{{localize 'niks-token-studio.SaveAvatar'}}">
                 <i class="fas fa-user-circle"></i> {{localize 'niks-token-studio.SaveAvatar'}}
@@ -82,8 +85,12 @@
 
                 <!-- Token Canvas -->
                 <div class="canvas-container {{#unless isTokenActive}}hidden{{/unless}}" id="container-token">
+                     <canvas class="nts-ring-preview" hidden></canvas>
                      <canvas id="canvas-token"></canvas>
                 </div>
+
+                <!-- Brush footprint (follows the mouse while a brush is on) -->
+                <div class="nts-brush-cursor" hidden></div>
 
                 <!-- Floating Auto-Fit -->
                 <button type="button" class="floating-btn" data-action="autoFit" title="{{localize 'niks-token-studio.AutoFit'}}">

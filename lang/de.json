@@ -4,6 +4,7 @@
     "WindowTitle": "Token-Studio: {name}",
     "OpenStudio": "Token-Studio",
     "Undo": "Rückgängig",
+    "Redo": "Wiederholen",
     "SaveAvatar": "Porträt speichern",
     "SaveToken": "Token speichern",
     "DragDropMessage": "Bild hier ablegen oder einfügen",
@@ -73,9 +74,12 @@
     "ImageCorsBlocked": "Das Bild konnte nicht von {host} geladen werden. Liegt es auf S3 oder einem anderen Datei-Host, muss dieser Cross-Origin-Anfragen (CORS) von diesem Foundry-Server erlauben.",
     "RemoveBackgroundColor": "Füllung entfernen",
     "NothingToUndo": "Nichts rückgängig zu machen.",
+    "NothingToRedo": "Nichts zu wiederholen.",
     "NoImageForLayer": "Diese Ebene hat noch kein Bild.",
     "FilePickerFailed": "Der Dateibrowser konnte nicht geöffnet werden.",
     "TokenSaveFailed": "Der Token konnte nicht gespeichert werden.",
+    "TokenSaved": "Token gespeichert: {path}",
+    "TokenSavedFallback": "Token im Speicherordner gespeichert, weil der Ordner des Porträts nicht verwendet werden kann: {path}",
     "AvatarSaveFailed": "Das Porträt konnte nicht gespeichert werden.",
     "settings": {
       "tokenLocation": {

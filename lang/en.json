@@ -4,6 +4,7 @@
     "WindowTitle": "Token Studio: {name}",
     "OpenStudio": "Token Studio",
     "Undo": "Undo",
+    "Redo": "Redo",
     "SaveAvatar": "Save Portrait",
     "SaveToken": "Save Token",
     "DragDropMessage": "Drop or paste an image here",
@@ -73,9 +74,12 @@
     "ImageCorsBlocked": "The image could not be loaded from {host}. If it is stored on S3 or another file host, that host has to allow cross-origin (CORS) requests from this Foundry server.",
     "RemoveBackgroundColor": "Remove Fill",
     "NothingToUndo": "Nothing to undo.",
+    "NothingToRedo": "Nothing to redo.",
     "NoImageForLayer": "This layer has no image yet.",
     "FilePickerFailed": "The file browser could not be opened.",
     "TokenSaveFailed": "The token could not be saved.",
+    "TokenSaved": "Token saved: {path}",
+    "TokenSavedFallback": "Token saved to the storage folder, because the portrait's folder can't be used: {path}",
     "AvatarSaveFailed": "The portrait could not be saved.",
     "settings": {
       "tokenLocation": {

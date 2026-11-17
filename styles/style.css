@@ -89,6 +89,26 @@
     color: #fff;
 }
 
+.niks-token-studio .header-actions button.icon-button {
+    flex: 0 0 auto;
+    min-width: 32px;
+    height: 28px;
+    padding: 0 8px;
+    justify-content: center;
+    line-height: 1;
+}
+.niks-token-studio .header-actions button.icon-button i {
+    margin: 0;
+    font-size: 13px;
+}
+.niks-token-studio .header-actions button:disabled {
+    opacity: 0.4;
+    cursor: default;
+    background: #333;
+    border-color: #555;
+    color: #eee;
+}
+
 .niks-token-studio .studio-body {
     display: flex;
     flex: 1;
@@ -210,6 +230,36 @@
     box-shadow: 0 0 50px rgba(0,0,0,0.8); /* Shadow acts as border */
 }
 
+
+.niks-token-studio .canvas-container canvas.brush-active { cursor: crosshair; }
+
+/* Dynamic Token Ring preview: behind the token art, like Foundry draws it */
+.niks-token-studio .canvas-container { position: relative; }
+.niks-token-studio .canvas-container canvas#canvas-token { position: relative; z-index: 1; }
+.niks-token-studio .canvas-container.ring-mode canvas#canvas-token { box-shadow: none; }
+.niks-token-studio .canvas-container canvas.nts-ring-preview {
+    position: absolute;
+    z-index: 0;
+    max-width: none;
+    max-height: none;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    box-shadow: none;
+}
+.niks-token-studio .canvas-container canvas.nts-ring-preview[hidden] { display: none; }
+
+/* Brush footprint ring: white with a dark edge so it shows on light and dark art */
+.niks-token-studio .nts-brush-cursor {
+    position: absolute;
+    z-index: 5;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), inset 0 0 0 1px rgba(0, 0, 0, 0.75);
+}
+.niks-token-studio .nts-brush-cursor.remove { border-style: dashed; }
+.niks-token-studio .nts-brush-cursor[hidden] { display: none; }
 
 /* Empty State */
 .niks-token-studio .empty-state {

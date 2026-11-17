@@ -1,5 +1,19 @@
 # Changelog
 
+## 14.1.0
+
+- **Undo works now.** Undo steps back through every change to the picture: moving, scaling and rotating layers, slider changes, brush strokes, removed colors, frames, fills and loaded images. Before, it often seemed to do nothing. Brush sizes, tool switches and other settings aren't undo steps.
+- **Redo:** a new button next to Undo brings back what you undid.
+- **Keyboard shortcuts:** Ctrl+Z (Cmd+Z on Mac) undoes and Ctrl+Shift+Z or Ctrl+Y redoes while Token Studio is the active window. They no longer reach Foundry's own Undo.
+- **The Undo button looks right again.** It's no longer squeezed into a thin bar, and Undo and Redo are greyed out when there's nothing to undo or redo.
+- **Large images load faster and use far less memory.** Art, backgrounds and frames larger than needed are scaled down when they're loaded, to at most 4 times the token resolution on the longer side (2048 px at the default 512 px). That's twice the largest token Token Studio saves, so zooming in still looks sharp. Smaller images are never enlarged, and nothing changes in size or position on screen, also for work saved earlier. Art you drop or paste is saved at the reduced size.
+- **Dynamic Token Ring preview:** with **Dynamic Token Ring** ticked, the preview now shows the real ring around the token instead of a dashed circle: the ring style from Foundry's settings (Steel, Bronze or a ring added by a module), the right ring for the token's size, the token's ring and background colors, and the art at the size Foundry will show it inside the ring. Parts painted with Break Out show on top of the ring, like on the canvas. Animated ring effects aren't shown.
+- **Easier zooming on a trackpad:** scrolling and pinching now zoom smoothly instead of racing, and a mouse wheel changes the size by about 10 % per notch. Zooming keeps the spot under the mouse in place (the frame still zooms around its centre) and works anywhere in the preview, not only over the image.
+- **Brush preview:** while the eraser, Break Out or Paint brush is on, a ring under the mouse shows exactly where and how big you'll paint. The ring is dashed when the brush takes something away.
+- **Token saved message:** after saving a token, a message shows the file it was saved to, and says so when it went to the storage folder because the portrait's folder couldn't be used.
+- **A changed portrait is picked up.** If an actor's portrait was changed outside Token Studio, opening Token Studio again starts from the new portrait. The frame, background, fill and shadow you chose are kept. Saving a portrait from inside Token Studio still keeps your art as it was.
+- **Fixes:** the eraser now works on the portrait view, Fit Image no longer stops halfway, and a dropped image is loaded only once.
+
 ## 14.0.0
 
 First release of Nik's Token Studio, a fork of Phil's Token Studio 1.6.3.

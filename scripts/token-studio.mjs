@@ -1,5 +1,6 @@
 import { MODULE_ID, BUILTIN_FRAMES, DEFAULT_FRAME } from "./const.mjs";
-import { loadImage, withCacheBuster } from "./image-loader.mjs";
+import { loadImage, originalSize, setSourceScale, sourceScale, withCacheBuster } from "./image-loader.mjs";
+import { renderRing, ringToCanvasRatio } from "./ring-preview.mjs";
 import { ensureFolder, nextTokenNumber, parseLocation, storageFolder, tokenBaseName, uploadTo } from "./storage.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -7,6 +8,49 @@ const LOG = "Nik's Token Studio |";
 
 /** @returns {typeof foundry.applications.apps.FilePicker} The configured FilePicker class. */
 const filePickerClass = () => foundry.applications.apps.FilePicker.implementation;
+
+/** The image buffers an undo step can restore. */
+const BUFFER_KEYS = ["tokenBuffer", "avatarBuffer", "backgroundBuffer", "frameBuffer", "popOutBuffer", "paintBuffer"];
+
+/** The source images the eraser restores from. */
+const ORIGINAL_KEYS = ["originalImage", "originalFrameImage", "originalBackgroundImage"];
+
+/** The parts of `uiState` that describe the picture (not tool settings or which tab is open). */
+const UNDO_STATE_KEYS = ["token", "avatar", "dynamicRingScale", "useFoundryRing", "avatarAspectRatio", "hasPopOutContent", "sourcePath"];
+
+/** Undo keeps at most this many steps, and drops the oldest when the copied images pass the memory budget. */
+const UNDO_MAX_STEPS = 100;
+const UNDO_BYTE_BUDGET = 512 * 1024 * 1024;
+
+/** Click actions and change handlers that change the picture and get an undo step. */
+const UNDOABLE_HANDLERS = new Set([
+    "_onAutoFit", "_onRemoveFrame", "_onSelectFrame", "_onDeleteBackground", "_onRemoveBackgroundColor",
+    "_onApplyChroma", "_onClearPaint", "_onClearPopout", "_onChangeAvatarRatio", "_onChangeRingScale",
+    "_onToggleFoundryRing"
+]);
+
+/** Slider names that change the picture (brush sizes and tolerance are tool settings). */
+const UNDOABLE_SLIDERS = new Set(["x", "y", "scale", "rotation", "shadowBlur"]);
+
+/**
+ * @param {HTMLCanvasElement} source
+ * @returns {HTMLCanvasElement} A copy with the same size and pixels.
+ */
+function cloneCanvas(source) {
+    const copy = document.createElement("canvas");
+    copy.width = source.width;
+    copy.height = source.height;
+    copy.getContext("2d", { willReadFrequently: true }).drawImage(source, 0, 0);
+    setSourceScale(copy, sourceScale(source));
+    return copy;
+}
+
+/**
+ * Loaded images are downscaled so their longer side is at most this many times the token resolution: twice the
+ * largest image Token Studio saves (a token with 200 % padding is 2 × the resolution), so zooming in by 2× still
+ * uses real pixels. At the default 512 px that's 2048 px.
+ */
+const MAX_IMAGE_SIDE_FACTOR = 4;
 
 /** Shorthand for this module's localization keys. */
 const loc = (key, data) => data ? game.i18n.format(`${MODULE_ID}.${key}`, data) : game.i18n.localize(`${MODULE_ID}.${key}`);
@@ -21,7 +65,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this.resolution = game.settings.get(MODULE_ID, "outputResolution") || 512;
         
         // State
-        const defaults = this.actor?.getFlag(MODULE_ID, "lastState") || {};
+        const defaults = QuickTokenStudio._savedSession(this.actor);
         
         this.uiState = {
             activeView: "token", // 'token' or 'avatar'
@@ -29,6 +73,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             activeTab: "transform",
             drafts: defaults.drafts || {}, // Persistence
             sourcePath: defaults.sourcePath || null, // Track original source
+            portrait: this.actor?.img ?? null, // The portrait this session belongs to
             token: {
                 transforms: {
                     x: defaults.token?.transforms?.x || 0,
@@ -115,8 +160,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this.userFrames = []; // List of frame paths
         
         // Undo History
-        this.history = [];
-        this.maxHistory = 50;
+        this._undoStack = [];
+        this._redoStack = [];
+        this._pendingChange = null;
         
         // Initial load
         this._loadUserFrames();
@@ -143,6 +189,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this._pasteHandler = this._onPaste.bind(this);
         this._moveHandler = this._onCanvasMouseMove.bind(this);
         this._upHandler = this._onCanvasMouseUp.bind(this);
+        this._keyHandler = this._onKeyDown.bind(this);
         
         // Actions
         // This specific line should ideally be in _attachEventListeners after HTML is rendered
@@ -150,6 +197,27 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
     }
     
+    /**
+     * The actor's saved session, or the parts of it that still apply when the portrait was changed outside the
+     * studio since then: the art, its position and everything painted or erased on it start fresh from the new
+     * portrait; frame, background, fill and shadow are kept.
+     * @param {Actor} actor
+     * @returns {object}
+     */
+    static _savedSession(actor) {
+        const saved = foundry.utils.deepClone(actor?.getFlag(MODULE_ID, "lastState") ?? {});
+        // Sessions saved before the portrait was tracked: compare with the art they used
+        const knownPortrait = saved.portrait ?? saved.sourcePath;
+        if (!actor || !knownPortrait || (knownPortrait === actor.img)) return saved;
+        delete saved.sourcePath;
+        delete saved.hasPopOutContent;
+        delete saved.token?.transforms;
+        delete saved.avatar?.transforms;
+        const { frame, background } = saved.drafts ?? {};
+        saved.drafts = { frame, background };
+        return saved;
+    }
+
     _getDefaultFramePath() {
         return game.settings.get(MODULE_ID, "defaultFrame") || DEFAULT_FRAME;
     }
@@ -181,12 +249,14 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
      * EXTEND CLOSE to save state
      */
     async close(options) {
+        this._ringResizeObserver?.disconnect();
         // Save Draft State (Buffers)
         await this._saveDraftState();
         
         window.removeEventListener("paste", this._pasteHandler);
         window.removeEventListener("mousemove", this._moveHandler);
         window.removeEventListener("mouseup", this._upHandler);
+        window.removeEventListener("keydown", this._keyHandler, { capture: true });
         return super.close(options);
     }
     
@@ -251,6 +321,83 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         // Manual Event Listeners
         this._attachEventListeners();
+
+        // Dynamic Token Ring preview: keep the overlay on the token canvas when the window or canvas resizes
+        this._ringResizeObserver?.disconnect();
+        if (this.canvasToken) {
+            this._ringResizeObserver = new ResizeObserver(() => this._layoutRingPreview());
+            this._ringResizeObserver.observe(this.canvasToken);
+        }
+        this._updateRingPreview();
+    }
+
+    /* ------------------------------------------- */
+    /*  Dynamic Token Ring Preview                 */
+    /* ------------------------------------------- */
+
+    /**
+     * Render the ring for the current ring setting, token size and ring colors (when they changed), then place it.
+     */
+    async _updateRingPreview() {
+        if (!this.uiState.useFoundryRing) return this._layoutRingPreview();
+        const proto = this.actor?.prototypeToken;
+        const options = {
+            gridSize: Math.min(proto?.width ?? 1, proto?.height ?? 1),
+            ringColor: proto?.ring?.colors?.ring ?? null,
+            backgroundColor: proto?.ring?.colors?.background ?? null
+        };
+        const key = JSON.stringify([CONFIG.Token.ring.spritesheet, options.gridSize,
+            String(options.ringColor ?? ""), String(options.backgroundColor ?? "")]);
+        if (this._ringPreviewKey !== key) {
+            this._ringPreviewKey = key;
+            this._ringPreviewPending = renderRing(options).catch(err => {
+                console.warn(`${LOG} Could not render the Dynamic Token Ring preview, showing a guide circle instead.`, err);
+                return null;
+            });
+            const preview = await this._ringPreviewPending;
+            if (this._ringPreviewKey !== key) return; // A newer request took over
+            this._ringPreview = preview;
+            this._ringPreviewPending = null;
+            this.drawTokenSandwich(); // The guide circle is only drawn without a preview
+        }
+        else if (this._ringPreviewPending) await this._ringPreviewPending; // Same ring still loading
+        this._layoutRingPreview();
+    }
+
+    /**
+     * Size and center the ring overlay on the token canvas. The canvas is made smaller in ring mode so the whole
+     * ring fits in the preview.
+     */
+    _layoutRingPreview() {
+        const canvas = this.canvasToken;
+        const container = canvas?.parentElement;
+        const overlay = container?.querySelector(".nts-ring-preview");
+        if (!overlay) return;
+        const preview = this.uiState.useFoundryRing ? this._ringPreview : null;
+        if (!preview) {
+            overlay.hidden = true;
+            container.classList.remove("ring-mode");
+            canvas.style.maxWidth = canvas.style.maxHeight = "";
+            return;
+        }
+
+        const ratio = ringToCanvasRatio(this.uiState.dynamicRingScale || 1, preview.subjectScaleAdjustment);
+        const fit = Math.max(1, ratio);
+        canvas.style.maxWidth = canvas.style.maxHeight = `${100 / fit}%`;
+        container.classList.add("ring-mode");
+
+        if (overlay._ringSource !== preview.canvas) {
+            overlay.width = preview.canvas.width;
+            overlay.height = preview.canvas.height;
+            overlay.getContext("2d").drawImage(preview.canvas, 0, 0);
+            overlay._ringSource = preview.canvas;
+        }
+        if (!canvas.offsetWidth) return; // Hidden (portrait view); the resize observer calls again when shown
+        const size = canvas.offsetWidth * ratio;
+        overlay.style.width = overlay.style.height = `${size}px`;
+        overlay.style.left = `${canvas.offsetLeft + (canvas.offsetWidth / 2)}px`;
+        overlay.style.top = `${canvas.offsetTop + (canvas.offsetHeight / 2)}px`;
+        overlay.hidden = false;
     }
 
     _attachEventListeners() {
@@ -264,14 +411,11 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                 const camelAction = action.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
                 const handler = this[`_on${camelAction.charAt(0).toUpperCase() + camelAction.slice(1)}`];
                 
-                // Only hijack if we actually handle it
-                if (handler) {
-                    // FIX: Do not preventDefault on inputs (checkboxes) or selects, otherwise they don't toggle/open
-                    if (el.tagName !== "INPUT" && el.tagName !== "SELECT") {
-                        ev.preventDefault();
-                    }
+                // Inputs and selects with a data-action are handled by their change listeners below
+                if (handler && (el.tagName !== "INPUT") && (el.tagName !== "SELECT")) {
+                    ev.preventDefault();
                     ev.stopPropagation();
-                    handler.call(this, ev, el);
+                    this._runHandler(handler, ev, el);
                 }
             });
         });
@@ -306,38 +450,43 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             // dropZone.addEventListener("drop", this._onDropFile.bind(this));
         }
 
-        // Floating Fit Button
-        const fitBtn = this.element.querySelector("button[data-action='autoFit']");
-        if (fitBtn) fitBtn.addEventListener("click", this._onAutoFit.bind(this));
 
-
-        // Global Paste Listener
+        // Window listeners (same function references, so re-renders don't add them twice)
         window.addEventListener("paste", this._pasteHandler);
-        
-        // Global Drag Listeners (for canvas interaction)
         window.addEventListener("mousemove", this._moveHandler);
         window.addEventListener("mouseup", this._upHandler);
+        // Capture phase, so Ctrl+Z reaches the studio before Foundry's own Undo keybinding
+        window.addEventListener("keydown", this._keyHandler, { capture: true });
         
-        // Prevent default drag/drop on this element
-        this.element.addEventListener("dragover", e => e.preventDefault());
-        this.element.addEventListener("drop", this._onDropFile.bind(this));
+        // The application element survives re-renders: bind its drop listeners only once
+        if (!this._elementListenersBound) {
+            this.element.addEventListener("dragover", e => e.preventDefault());
+            this.element.addEventListener("drop", this._onDropFile.bind(this));
+            this._elementListenersBound = true;
+        }
         
-        // Canvas Painting State Listeners
+        // Canvas Painting State Listeners (stopped in _onCanvasMouseUp)
         const canvasToken = html.querySelector("#canvas-token");
         const canvasAvatar = html.querySelector("#canvas-avatar");
-        
         const startPainting = () => { this.isCanvasPainting = true; };
-        const stopPainting = () => { this.isCanvasPainting = false; };
-        
         if(canvasToken) canvasToken.addEventListener("mousedown", startPainting);
         if(canvasAvatar) canvasAvatar.addEventListener("mousedown", startPainting);
-        window.addEventListener("mouseup", stopPainting);
+
+        // Brush footprint ring
+        for (const [canvas, view] of [[canvasToken, "token"], [canvasAvatar, "avatar"]]) {
+            if (!canvas) continue;
+            canvas.addEventListener("mousemove", ev => this._updateBrushCursor(ev, canvas, view));
+            canvas.addEventListener("mouseleave", () => this._hideBrushCursor());
+        }
         
         // Color Inputs (Shadow/Background) - FIX: Explicit Listeners
         html.querySelectorAll("input[type='color']").forEach(input => {
+            const undoable = ["shadowColor", "backgroundColor"].includes(input.name);
+            if (undoable) input.addEventListener("change", () => this._commitChange());
             input.addEventListener("input", (e) => {
                 const name = e.target.name;
                 const value = e.target.value;
+                if (undoable) this._beginChange();
                 
                 if (name === "shadowColor") {
                     this.uiState.token.fx.shadowColor = value;
@@ -358,8 +507,12 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
         // TRANSFORM INPUTS (Sliders & Manual Entry)
         html.querySelectorAll("input[type='range']").forEach(input => {
-            input.addEventListener("input", this._onTransformChange.bind(this));
-            input.addEventListener("change", () => this._saveHistory()); // Save history on release
+            const undoable = UNDOABLE_SLIDERS.has(input.name);
+            input.addEventListener("input", (event) => {
+                if (undoable) this._beginChange();
+                this._onTransformChange(event);
+            });
+            if (undoable) input.addEventListener("change", () => this._commitChange()); // One step per slider drag
         });
         
         html.querySelectorAll(".val-input").forEach(input => {
@@ -374,8 +527,11 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                 const slider = this.element.querySelector(`input[type='range'][name='${name}']`);
                 if (slider) {
                     slider.value = val;
+                    const undoable = UNDOABLE_SLIDERS.has(name);
+                    if (undoable) this._beginChange();
                     // Trigger logic, passing the INPUT as the target so we don't overwrite it
                     this._onTransformChange({ currentTarget: slider, originalTarget: target });
+                    if (undoable) this._commitChange();
                 } else {
                     // Direct update for non-slider inputs
                     if (name === 'chromaTolerance') {
@@ -397,21 +553,15 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             input.addEventListener("change", this._onLayerChange.bind(this));
         });
 
-        // New Actions
-        const btnDeleteBG = html.querySelector("[data-action='deleteBackground']");
-        if (btnDeleteBG) btnDeleteBG.addEventListener("click", this._onDeleteBackground.bind(this));
-        
-        const btnUploadPortrait = html.querySelector("[data-action='uploadPortrait']");
-        if (btnUploadPortrait) btnUploadPortrait.addEventListener("click", this._onUploadPortrait.bind(this));
-        
+        // Selects and checkboxes
         const inputAvatarRatio = html.querySelector("[data-action='changeAvatarRatio']");
-        if (inputAvatarRatio) inputAvatarRatio.addEventListener("change", this._onChangeAvatarRatio.bind(this));
+        if (inputAvatarRatio) inputAvatarRatio.addEventListener("change", ev => this._runHandler(this._onChangeAvatarRatio, ev));
         
         const inputRingScale = html.querySelector("[data-action='changeRingScale']");
-        if (inputRingScale) inputRingScale.addEventListener("change", this._onChangeRingScale.bind(this));
+        if (inputRingScale) inputRingScale.addEventListener("change", ev => this._runHandler(this._onChangeRingScale, ev));
 
         const checkFoundryRing = html.querySelector("[data-action='toggleFoundryRing']");
-        if (checkFoundryRing) checkFoundryRing.addEventListener("change", this._onToggleFoundryRing.bind(this));
+        if (checkFoundryRing) checkFoundryRing.addEventListener("change", ev => this._runHandler(this._onToggleFoundryRing, ev));
 
 
 
@@ -470,6 +620,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         }
         
         this._sessionRestored = true;
+        this._clearHistory(); // Undo starts from the picture as it was when the studio opened
     }
     
     _onTabClick(e) {
@@ -494,7 +645,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
     _bindCanvasEvents(canvas, viewName) {
          if (!canvas) return;
-         canvas.addEventListener("wheel", (e) => this._onCanvasWheel(e, viewName), { passive: false });
+         // Zoom listeners on the container, so the wheel and pinching work anywhere in the preview
+         const zoomArea = canvas.parentElement ?? canvas;
+         zoomArea.addEventListener("wheel", (e) => this._onCanvasWheel(e, viewName), { passive: false });
          canvas.addEventListener("mousedown", (e) => this._onCanvasMouseDown(e, viewName));
     }
 
@@ -614,8 +767,13 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             
             hasSourceImage: !!this.originalImage,
             
-            // Sliders (Mapped to current layer)
-            transforms: currentTransforms,
+            // Sliders (Mapped to current layer), rounded for display; the state keeps exact values from zooming
+            transforms: {
+                x: Math.round(currentTransforms.x),
+                y: Math.round(currentTransforms.y),
+                scale: Math.round(currentTransforms.scale * 100) / 100,
+                rotation: Math.round(currentTransforms.rotation)
+            },
             fx: this.uiState.token.fx, // Background color/shadow is global to token for now? Or per layer? Usually global.
             
             frames: (this.userFrames || []).map(f => ({
@@ -649,7 +807,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             // New State
             dynamicRingScale: this.uiState.dynamicRingScale,
             useFoundryRing: this.uiState.useFoundryRing,
-            avatarAspectRatio: this.uiState.avatarAspectRatio
+            avatarAspectRatio: this.uiState.avatarAspectRatio,
+            canUndo: this._undoStack.length > 0,
+            canRedo: this._redoStack.length > 0
         };
     }
     
@@ -661,7 +821,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             return;
         }
         try {
-            const img = await loadImage(src);
+            const img = await loadImage(src, { maxSide: this._maxImageSide });
             // this.frameImage = img; // We don't use the raw image anymore for drawing
             this.originalFrameImage = img; // Keep for restore
             
@@ -684,8 +844,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         if (!src) return;
         
         try {
-            // Load the raw image first
-            const img = await loadImage(src);
+            // Load the raw image first, downscaled when it's much larger than anything Token Studio saves
+            const img = await loadImage(src, { maxSide: this._maxImageSide });
             
             this.originalImage = img;
             
@@ -727,7 +887,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     async _loadBackground(src) {
         if (!src) return;
         try {
-            const img = await loadImage(src);
+            const img = await loadImage(src, { maxSide: this._maxImageSide });
 
             this.originalBackgroundImage = img; // Keep for restore
 
@@ -754,7 +914,23 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         canvas.height = img.height;
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
+        setSourceScale(canvas, sourceScale(img));
         return canvas;
+    }
+
+    /** @returns {number} The longest side, in pixels, that loaded images keep. */
+    get _maxImageSide() {
+        return MAX_IMAGE_SIDE_FACTOR * this.resolution;
+    }
+
+    /**
+     * Draw a layer buffer centred on the current origin at the size of its original image.
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {HTMLCanvasElement} buffer
+     */
+    _drawLayerBuffer(ctx, buffer) {
+        const { width, height } = originalSize(buffer);
+        ctx.drawImage(buffer, -width / 2, -height / 2, width, height);
     }
 
     _onDropFile(ev) {
@@ -763,16 +939,16 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const file = ev.dataTransfer.files[0];
         if (file && file.type.startsWith("image/")) {
             const reader = new FileReader();
-            reader.onload = (e) => {
+            reader.onload = (e) => this._recordImageLoad(async () => {
                 if (this.uiState.activeLayer === 'background') {
                     // Load as background (no storage change yet, just visual)
-                    this._loadBackground(e.target.result);
+                    await this._loadBackground(e.target.result);
                 } else {
                     this.uiState.sourcePath = null; // Clear old path
                     this._isLocalSource = true; // Mark as needing upload
-                    this._loadSourceImage(e.target.result);
+                    await this._loadSourceImage(e.target.result);
                 }
-            };
+            });
             reader.readAsDataURL(file);
         }
     }
@@ -783,15 +959,15 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             if (item.type.indexOf("image") !== -1) {
                 const blob = item.getAsFile();
                 const reader = new FileReader();
-                reader.onload = (e) => {
+                reader.onload = (e) => this._recordImageLoad(async () => {
                     if (this.uiState.activeLayer === 'background') {
-                        this._loadBackground(e.target.result);
+                        await this._loadBackground(e.target.result);
                     } else {
                         this.uiState.sourcePath = null; 
                         this._isLocalSource = true; 
-                        this._loadSourceImage(e.target.result);
+                        await this._loadSourceImage(e.target.result);
                     }
-                };
+                });
                 reader.readAsDataURL(blob);
                 ev.preventDefault(); 
                 break;
@@ -805,10 +981,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             const FilePickerClass = filePickerClass();
             new FilePickerClass({
                 type: "image",
-                callback: (path) => {
+                callback: (path) => this._recordImageLoad(async () => {
                     this.uiState.sourcePath = path; // Save the source!
-                    this._loadSourceImage(path);
-                }
+                    await this._loadSourceImage(path);
+                })
             }).browse();
         } catch (err) {
             console.error(`${LOG} FilePicker Error:`, err);
@@ -822,9 +998,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             const FilePickerClass = filePickerClass();
             new FilePickerClass({
                 type: "image",
-                callback: (path) => {
-                    this._loadBackground(path);
-                }
+                callback: (path) => this._recordImageLoad(() => this._loadBackground(path))
             }).browse();
         } catch (err) {
             console.error(`${LOG} FilePicker Error:`, err);
@@ -868,9 +1042,23 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this.render();
     }
     
+    /**
+     * Load an image as one undo step.
+     * @param {Function} load  Async function that loads the image.
+     */
+    async _recordImageLoad(load) {
+        this._commitChange(); // Don't merge into a change that's still open
+        this._beginChange();
+        try {
+            await load();
+        } finally {
+            this._commitChange();
+        }
+    }
+
     _onClearPaint(ev) {
         if(!this.paintBuffer) return;
-        const ctx = this.paintBuffer.getContext("2d");
+        const ctx = this._editBuffer("paintBuffer").getContext("2d");
         ctx.clearRect(0, 0, this.paintBuffer.width, this.paintBuffer.height);
         this.drawAll();
     }
@@ -933,7 +1121,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                 ctx.translate(canvasSize/2 + bgState.transforms.x, canvasSize/2 + bgState.transforms.y);
                 ctx.rotate((bgState.transforms.rotation * Math.PI) / 180);
                 ctx.scale(bgState.transforms.scale, bgState.transforms.scale);
-                ctx.drawImage(this.backgroundBuffer, -this.backgroundBuffer.width/2, -this.backgroundBuffer.height/2);
+                this._drawLayerBuffer(ctx, this.backgroundBuffer);
             }
             ctx.restore();
         }
@@ -969,7 +1157,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              ctx.translate(canvasSize/2 + state.transforms.x, canvasSize/2 + state.transforms.y);
              ctx.rotate((state.transforms.rotation * Math.PI) / 180);
              ctx.scale(state.transforms.scale, state.transforms.scale);
-             ctx.drawImage(this.tokenBuffer, -this.tokenBuffer.width/2, -this.tokenBuffer.height/2);
+             this._drawLayerBuffer(ctx, this.tokenBuffer);
             
             ctx.restore();
         }
@@ -979,7 +1167,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const usingFoundryRing = this.uiState.useFoundryRing;
         
         // VISUAL GUIDE: If using Foundry Ring use dashed line
-        if (usingFoundryRing && !isExport) {
+        if (usingFoundryRing && !isExport && !this._ringPreview) {
              ctx.save();
              ctx.translate(canvasSize/2 + fState.transforms.x, canvasSize/2 + fState.transforms.y);
              ctx.rotate((fState.transforms.rotation * Math.PI) / 180);
@@ -1034,7 +1222,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              charCtx.translate(canvasSize/2 + state.transforms.x, canvasSize/2 + state.transforms.y);
              charCtx.rotate((state.transforms.rotation * Math.PI) / 180);
              charCtx.scale(state.transforms.scale, state.transforms.scale);
-             charCtx.drawImage(this.tokenBuffer, -this.tokenBuffer.width/2, -this.tokenBuffer.height/2);
+             this._drawLayerBuffer(charCtx, this.tokenBuffer);
              charCtx.restore();
              
              // Apply MASK (Destination-In) using ONLY the Brush Buffer
@@ -1076,135 +1264,6 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this.drawTokenSandwich();
     }
 
-    drawToken_unused() {
-        if (!this.canvasToken || !this.ctxToken) return;
-        const ctx = this.ctxToken;
-        const state = this.uiState.token;
-        const size = this.resolution;
-        
-        if (this.canvasToken.width !== size || this.canvasToken.height !== size) {
-            this.canvasToken.width = size;
-            this.canvasToken.height = size;
-        }
-
-        // Clean Slate
-        ctx.clearRect(0, 0, size, size);
-
-        // ----------------------------------------------------
-        // PREPARE MASK BUFFER (Base Circle + Brush)
-        // ----------------------------------------------------
-        if (!this._maskBuffer) {
-             const c = document.createElement("canvas");
-             c.width = size;
-             c.height = size;
-             this._maskBuffer = c;
-        }
-        if (this._maskBuffer.width !== size) { this._maskBuffer.width = size; this._maskBuffer.height = size; }
-        
-        const mCtx = this._maskBuffer.getContext("2d");
-        mCtx.clearRect(0, 0, size, size);
-        
-        // 1. Draw Base Circle (The Hole in the Frame)
-        const fState = state.frame;
-        
-        mCtx.save();
-        mCtx.beginPath();
-        const cx = size/2 + fState.transforms.x;
-        const cy = size/2 + fState.transforms.y;
-        const r = (size/2) * fState.transforms.scale; 
-        
-        mCtx.fillStyle = "#ffffff";
-        mCtx.arc(cx, cy, Math.max(0, r), 0, Math.PI * 2);
-        mCtx.fill();
-        mCtx.restore();
-        
-        // 2. Add Pop-Out Brush Strokes (White)
-        if (this.popOutBuffer && this._bufferHasContent(this.popOutBuffer)) {
-            mCtx.drawImage(this.popOutBuffer, 0, 0, size, size);
-        }
-
-        // ----------------------------------------------------
-        // RENDER LAYERS
-        // ----------------------------------------------------
-        
-        ctx.save();
-        
-        // Step 2: Draw Background (Texture/Color)
-        if (state.fx.backgroundColor || (state.background?.active && this.backgroundBuffer)) {
-            ctx.save();
-            // Clip to Circle (Background stays inside ring)
-            ctx.beginPath();
-            ctx.arc(cx, cy, Math.max(0, r), 0, Math.PI * 2);
-            ctx.clip();
-            
-            if (state.fx.backgroundColor) {
-                 ctx.fillStyle = state.fx.backgroundColor;
-                 ctx.fill();
-            }
-            if (state.background?.active && this.backgroundBuffer) {
-                const bgState = state.background;
-                ctx.translate(size/2 + bgState.transforms.x, size/2 + bgState.transforms.y);
-                ctx.rotate((bgState.transforms.rotation * Math.PI) / 180);
-                ctx.scale(bgState.transforms.scale, bgState.transforms.scale);
-                ctx.drawImage(this.backgroundBuffer, -this.backgroundBuffer.width/2, -this.backgroundBuffer.height/2);
-            }
-            ctx.restore();
-        }
-
-        // Step 3: Draw The Frame (The Ring PNG) <--- FRAME COMES FIRST
-        if (this.frameBuffer) {
-            ctx.save();
-            ctx.translate(size/2 + fState.transforms.x, size/2 + fState.transforms.y);
-            ctx.rotate((fState.transforms.rotation * Math.PI) / 180);
-            ctx.scale(fState.transforms.scale, fState.transforms.scale);
-            ctx.drawImage(this.frameBuffer, -size/2, -size/2, size, size);
-            ctx.restore();
-        }
-        
-        // Step 4: Draw The Character (Masked)
-        // We use a temp canvas to avoid masking the Frame we just drew
-        if (this.tokenBuffer) {
-             ctx.save();
-             
-             const charC = document.createElement("canvas");
-             charC.width = size;
-             charC.height = size;
-             const charCtx = charC.getContext("2d");
-             
-             // Draw Character + Shadow ON TOP
-             charCtx.save();
-             if (state.fx.shadowBlur > 0) {
-                 charCtx.shadowColor = state.fx.shadowColor;
-                 charCtx.shadowBlur = state.fx.shadowBlur;
-             }
-             charCtx.translate(size/2 + state.transforms.x, size/2 + state.transforms.y);
-             charCtx.rotate((state.transforms.rotation * Math.PI) / 180);
-             charCtx.scale(state.transforms.scale, state.transforms.scale);
-             charCtx.drawImage(this.tokenBuffer, -this.tokenBuffer.width/2, -this.tokenBuffer.height/2);
-             charCtx.restore();
-             
-             // Apply MASK (Destination-In)
-             // Keeps Character ONLY where Mask is White (Circle + Brush)
-             charCtx.globalCompositeOperation = "destination-in";
-             charCtx.drawImage(this._maskBuffer, 0, 0, size, size);
-             
-             // Draw Result onto Main Canvas (Over Frame)
-             ctx.drawImage(charC, 0, 0);
-             
-             ctx.restore();
-        }
-        
-        // Pop-Out Mask Overlay (Visual Guide)
-        if (this.uiState.isPopOutActive && this.popOutBuffer) {
-            ctx.save();
-            ctx.globalAlpha = 0.3;
-            ctx.drawImage(this.popOutBuffer, 0, 0, size, size);
-            ctx.restore();
-        }
-
-        ctx.restore();
-    }
-    
     _bufferHasContent(canvas) {
         // Quick check if canvas is empty? 
         // For now assume yes if we are using it.
@@ -1247,9 +1306,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             ctx.rotate((state.transforms.rotation * Math.PI) / 180);
             ctx.scale(state.transforms.scale, state.transforms.scale);
             
-            const imgW = this.avatarBuffer.width;
-            const imgH = this.avatarBuffer.height;
-            ctx.drawImage(this.avatarBuffer, -imgW/2, -imgH/2);
+            this._drawLayerBuffer(ctx, this.avatarBuffer);
             ctx.restore();
         }
         ctx.restore();
@@ -1265,20 +1322,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this._activeDragView = viewName;
         this._dragStart = { x: event.clientX, y: event.clientY };
         
-        // Save history if we are about to Erase (Left Click only) or Paint PopOut or Paint Color
-        if ((this.uiState.isEraserActive || this.uiState.isPopOutActive || this.uiState.isPaintActive) && (event.buttons === 1)) {
-            // We need to know WHICH buffer we are about to modify to save IT
-            let targetLayer = 'token'; // default
-            if (viewName === 'token') {
-                if (this.uiState.activeLayer === 'background') targetLayer = 'background';
-                else if (this.uiState.activeLayer === 'character') targetLayer = 'token'; // tokenBuffer is the character
-            } else {
-                targetLayer = 'avatar';
-            }
-            this._saveHistory(targetLayer);
-        }
+        // Everything until the mouse is released (a brush stroke or a drag) is one undo step
+        this._beginChange();
+        this._pointerChange = true;
 
-        // Store initial transform of the Dragged View, respecting Active Layer
         // Store initial transform of the Dragged View, respecting Active Layer
         if (viewName === 'token') {
              if (this.uiState.activeLayer === 'background') {
@@ -1328,7 +1375,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              const canvasX = mx * scaleX;
              const canvasY = my * scaleY;
              
-             const ctx = this.paintBuffer.getContext("2d");
+             const ctx = this._editBuffer("paintBuffer").getContext("2d");
              ctx.save();
              
              // MODE LOGIC
@@ -1370,7 +1417,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              const canvasX = mx * scaleX;
              const canvasY = my * scaleY;
              
-             const ctx = this.popOutBuffer.getContext("2d");
+             const ctx = this._editBuffer("popOutBuffer").getContext("2d");
              ctx.save();
              
              // MODE LOGIC
@@ -1415,7 +1462,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             // Check Avatar Canvas (if not found yet)
             if (!viewName && this.canvasAvatar) {
                 const r = this.canvasAvatar.getBoundingClientRect();
-                if (mx >= r.left && mx >= r.right && my >= r.top && my <= r.bottom) {
+                if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
                     viewName = 'avatar';
                     canvas = this.canvasAvatar;
                 }
@@ -1424,24 +1471,25 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             if (!viewName) return;
 
         // Select active buffer based on DETECTED view AND Active Layer
-        let targetBuffer = null;
+        let bufferKey;
         let state = null;
 
         if (viewName === 'token') {
             if (this.uiState.activeLayer === 'background') {
-                 targetBuffer = this.backgroundBuffer;
+                 bufferKey = "backgroundBuffer";
                  state = this.uiState.token.background;
             } else if (this.uiState.activeLayer === 'frame') {
-                 targetBuffer = this.frameBuffer;
+                 bufferKey = "frameBuffer";
                  state = this.uiState.token.frame;
             } else {
-                 targetBuffer = this.tokenBuffer;
+                 bufferKey = "tokenBuffer";
                  state = this.uiState.token; // Character state
             }
         } else {
-             targetBuffer = this.avatarBuffer;
+             bufferKey = "avatarBuffer";
              state = this.uiState.avatar;
         }
+        const targetBuffer = this._editBuffer(bufferKey);
 
         if (!targetBuffer) return;
         if (!canvas) return;
@@ -1499,14 +1547,12 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                  renderW = size;
                  renderH = size;
              } else {
-                 // Character and Background are drawn NATIVE (centered)
-                 renderW = targetBuffer.width;
-                 renderH = targetBuffer.height;
+                 // Character and Background are drawn at their original image size (centered)
+                 ({ width: renderW, height: renderH } = originalSize(targetBuffer));
              }
         } else {
-            // Avatar View: Draws native size centered
-             renderW = targetBuffer.width;
-             renderH = targetBuffer.height;
+            // Avatar View: drawn at the original image size, centered
+             ({ width: renderW, height: renderH } = originalSize(targetBuffer));
         }
 
         const ratioX = targetBuffer.width / renderW;
@@ -1621,37 +1667,84 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     }
     
     _onCanvasMouseUp(event) {
-        if (this._isDragging) {
-            this._saveHistory(); // Save new position
+        this.isCanvasPainting = false;
+        if (this._pointerChange) {
+            this._pointerChange = false;
+            this._commitChange();
         }
         this._isDragging = false;
         this._activeDragView = null;
     }
 
+    /**
+     * Zoom the active layer with the mouse wheel or the trackpad. The change follows the size of the gesture
+     * (trackpads send many small events, a mouse wheel few large ones), so it feels the same on both. Pinching
+     * arrives as ctrl+wheel with small deltas and zooms faster per pixel.
+     * @param {WheelEvent} event
+     * @param {"token"|"avatar"} viewName
+     */
     _onCanvasWheel(event, viewName) {
         event.preventDefault();
-        const delta = event.deltaY;
-        // User reported 0.005 was too slow/locked. 0.05 was too fast. Trying 0.02.
-        const speed = 0.02; 
-        
-        let targetTransforms;
-        if (viewName === 'token') {
-             if (this.uiState.activeLayer === 'background') targetTransforms = this.uiState.token.background.transforms;
-             else if (this.uiState.activeLayer === 'frame') targetTransforms = this.uiState.token.frame.transforms;
-             else targetTransforms = this.uiState.token.transforms;
-        } else {
-            targetTransforms = this.uiState[viewName].transforms;
-        }
+        // One undo step per burst of wheel events
+        this._beginChange();
+        clearTimeout(this._wheelTimer);
+        this._wheelTimer = setTimeout(() => this._commitChange(), 400);
 
-        const currentScale = targetTransforms.scale;
-        let newScale = currentScale - (Math.sign(delta) * speed);
-        newScale = Math.min(Math.max(newScale, 0.1), 5.0);
-        
-        targetTransforms.scale = parseFloat(newScale.toFixed(2));
-        
+        let delta = event.deltaY;
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 16;
+        else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta *= 400;
+        delta = Math.max(-200, Math.min(200, delta)); // One very large event shouldn't jump
+        const perPixel = event.ctrlKey ? 0.01 : 0.001; // About 10 % per mouse wheel notch
+        this._zoomLayer(viewName, Math.exp(-delta * perPixel), event.clientX, event.clientY);
+    }
+
+    /**
+     * @param {"token"|"avatar"} viewName
+     * @returns {{x: number, y: number, scale: number, rotation: number}} The transforms of the layer being edited.
+     */
+    _layerTransforms(viewName) {
+        if (viewName === 'token') {
+             if (this.uiState.activeLayer === 'background') return this.uiState.token.background.transforms;
+             if (this.uiState.activeLayer === 'frame') return this.uiState.token.frame.transforms;
+             return this.uiState.token.transforms;
+        }
+        return this.uiState[viewName].transforms;
+    }
+
+    /**
+     * Scale the active layer by `factor`, keeping the point under the mouse in place (the frame always scales
+     * around its centre).
+     * @param {"token"|"avatar"} viewName
+     * @param {number} factor
+     * @param {number} [clientX]
+     * @param {number} [clientY]
+     */
+    _zoomLayer(viewName, factor, clientX, clientY) {
+        if (!Number.isFinite(factor) || (factor <= 0)) return;
+        const t = this._layerTransforms(viewName);
+        const newScale = Math.min(Math.max(t.scale * factor, 0.1), 5.0);
+        const applied = newScale / t.scale;
+        if (applied === 1) return;
+
+        const canvas = (viewName === 'token') ? this.canvasToken : this.canvasAvatar;
+        const isFrame = (viewName === 'token') && (this.uiState.activeLayer === 'frame');
+        if (canvas?.width && !isFrame && Number.isFinite(clientX)) {
+            const rect = canvas.getBoundingClientRect();
+            const inside = rect.width && (clientX >= rect.left) && (clientX <= rect.right) && (clientY >= rect.top) && (clientY <= rect.bottom);
+            if (inside) {
+                // Mouse position and layer origin in canvas pixels
+                const px = (clientX - rect.left) * (canvas.width / rect.width);
+                const py = (clientY - rect.top) * (canvas.height / rect.height);
+                const ox = (canvas.width / 2) + t.x;
+                const oy = (canvas.height / 2) + t.y;
+                t.x = (px - ((px - ox) * applied)) - (canvas.width / 2);
+                t.y = (py - ((py - oy) * applied)) - (canvas.height / 2);
+            }
+        }
+        t.scale = newScale;
+
         if (viewName === 'token') this.drawToken();
         else this.drawAvatar();
-        
         this._updateTransformUI();
     }
 
@@ -1674,6 +1767,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const html = this.element;
         
         const setVal = (name, val) => {
+            // Zooming and dragging keep exact values; show them rounded
+            if (typeof val === "number") val = (name === "scale") ? Math.round(val * 100) / 100 : Math.round(val);
             const input = html.querySelector(`input[name='${name}']`);
             if (input) input.value = val;
             
@@ -1832,93 +1927,220 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     /*  History & Undo                             */
     /* ------------------------------------------- */
 
-    _saveHistory() {
-        if (!this.tokenBuffer || !this.avatarBuffer) return;
-        
-        // Save simple state
-        const stateSnapshot = JSON.parse(JSON.stringify(this.uiState));
-        
-        // Save buffers
-        const tokenData = this.tokenBuffer.getContext("2d").getImageData(0, 0, this.tokenBuffer.width, this.tokenBuffer.height);
-        const avatarData = this.avatarBuffer.getContext("2d").getImageData(0, 0, this.avatarBuffer.width, this.avatarBuffer.height);
-        
-        let bgData = null;
-        if (this.backgroundBuffer) {
-            bgData = this.backgroundBuffer.getContext("2d").getImageData(0, 0, this.backgroundBuffer.width, this.backgroundBuffer.height);
-        }
+    /**
+     * Copy the picture: the drawing-relevant parts of `uiState` and references to the image buffers. Buffers are
+     * never changed in place while they are part of a snapshot: `_editBuffer` swaps in a copy first.
+     * @returns {object}
+     */
+    _captureSnapshot() {
+        const snapshot = { state: {}, buffers: {}, originals: {}, isLocalSource: this._isLocalSource, bytes: 0 };
+        for (const key of UNDO_STATE_KEYS) snapshot.state[key] = foundry.utils.deepClone(this.uiState[key]);
+        for (const key of BUFFER_KEYS) snapshot.buffers[key] = this[key];
+        for (const key of ORIGINAL_KEYS) snapshot.originals[key] = this[key];
+        return snapshot;
+    }
 
-        let popData = null;
-        if (this.popOutBuffer) {
-            popData = this.popOutBuffer.getContext("2d").getImageData(0, 0, this.popOutBuffer.width, this.popOutBuffer.height);
-        }
+    _applySnapshot(snapshot) {
+        for (const key of UNDO_STATE_KEYS) this.uiState[key] = foundry.utils.deepClone(snapshot.state[key]);
+        for (const key of BUFFER_KEYS) this[key] = snapshot.buffers[key];
+        for (const key of ORIGINAL_KEYS) this[key] = snapshot.originals[key];
+        this._isLocalSource = snapshot.isLocalSource;
+    }
 
-        let frameData = null;
-        if (this.frameBuffer) {
-            frameData = this.frameBuffer.getContext("2d").getImageData(0, 0, this.frameBuffer.width, this.frameBuffer.height);
-        }
+    /**
+     * Start an undoable change, remembering the picture as it is now. Calls while a change is open join it.
+     */
+    _beginChange() {
+        this._pendingChange ??= { snapshot: this._captureSnapshot(), cloned: new Set() };
+    }
 
-        let paintData = null;
-        if (this.paintBuffer) {
-            paintData = this.paintBuffer.getContext("2d").getImageData(0, 0, this.paintBuffer.width, this.paintBuffer.height);
-        }
+    /**
+     * Close the open change. It becomes an undo step only if the picture actually changed.
+     */
+    _commitChange() {
+        const change = this._pendingChange;
+        this._pendingChange = null;
+        clearTimeout(this._wheelTimer);
+        if (!change || !this._differsFromCurrent(change.snapshot)) return;
+        this._pushStep(this._undoStack, change.snapshot);
+        this._redoStack.length = 0;
+        this._updateUndoButtons();
+    }
 
-        this.history.push({
-            tokenData,
-            avatarData,
-            bgData,
-            popData,
-            frameData,
-            paintData,
-            state: stateSnapshot
-        });
-        
-        if (this.history.length > this.maxHistory) {
-            this.history.shift(); // Remove oldest
+    /**
+     * @param {object} snapshot
+     * @returns {boolean} Whether the current picture differs from the snapshot.
+     */
+    _differsFromCurrent(snapshot) {
+        if (BUFFER_KEYS.some(key => snapshot.buffers[key] !== this[key])) return true;
+        if (ORIGINAL_KEYS.some(key => snapshot.originals[key] !== this[key])) return true;
+        return UNDO_STATE_KEYS.some(key => JSON.stringify(snapshot.state[key]) !== JSON.stringify(this.uiState[key]));
+    }
+
+    /**
+     * Get a buffer for drawing into it. The first edit during a change swaps in a copy, so the undo snapshot keeps
+     * the untouched original.
+     * @param {string} key  One of BUFFER_KEYS.
+     * @returns {HTMLCanvasElement|null}
+     */
+    _editBuffer(key) {
+        const buffer = this[key];
+        if (!buffer) return null;
+        this._beginChange();
+        const change = this._pendingChange;
+        if (!change.cloned.has(key)) {
+            this[key] = cloneCanvas(buffer);
+            change.cloned.add(key);
+            change.snapshot.bytes += buffer.width * buffer.height * 4;
         }
+        return this[key];
+    }
+
+    /**
+     * Run a click or change handler as one undo step (if it changes the picture).
+     * @param {Function} handler
+     * @param {...any} args
+     */
+    async _runHandler(handler, ...args) {
+        if (!UNDOABLE_HANDLERS.has(handler.name)) return handler.call(this, ...args);
+        this._beginChange();
+        try {
+            return await handler.call(this, ...args);
+        } finally {
+            this._commitChange();
+        }
+    }
+
+    _pushStep(stack, snapshot) {
+        stack.push(snapshot);
+        let bytes = stack.reduce((sum, step) => sum + step.bytes, 0);
+        while ((stack.length > UNDO_MAX_STEPS) || ((bytes > UNDO_BYTE_BUDGET) && (stack.length > 1))) {
+            bytes -= stack.shift().bytes;
+        }
+    }
+
+    /**
+     * Step back (or forward) in the history. The current picture goes onto the opposite stack.
+     * @param {object[]} from
+     * @param {object[]} to
+     * @returns {boolean} Whether there was a step.
+     */
+    _stepHistory(from, to) {
+        this._commitChange();
+        const snapshot = from.pop();
+        if (!snapshot) return false;
+        const current = this._captureSnapshot();
+        this._applySnapshot(snapshot);
+        for (const key of BUFFER_KEYS) {
+            const buffer = current.buffers[key];
+            if (buffer && (buffer !== this[key])) current.bytes += buffer.width * buffer.height * 4;
+        }
+        this._pushStep(to, current);
+        this.drawAll();
+        this.render(); // Sliders, frame list and layer controls follow the restored picture
+        return true;
     }
 
     _onUndo() {
-        if (this.history.length === 0) return ui.notifications.info(loc("NothingToUndo"));
-        
-        const step = this.history.pop();
-        
-        // Restore State (Deep Copy)
-        if (step.state) {
-            this.uiState = JSON.parse(JSON.stringify(step.state));
-            this._updateTransformUI(); // Sync sliders
-        }
-        
-        if (step.tokenData && this.tokenBuffer) {
-             this.tokenBuffer.getContext("2d").putImageData(step.tokenData, 0, 0);
-        }
-        
-        if (step.avatarData && this.avatarBuffer) {
-             this.avatarBuffer.getContext("2d").putImageData(step.avatarData, 0, 0);
-        }
-
-        if (step.bgData && this.backgroundBuffer) {
-            this.backgroundBuffer.getContext("2d").putImageData(step.bgData, 0, 0);
-        }
-
-        if (step.frameData && this.frameBuffer) {
-             this.frameBuffer.getContext("2d").putImageData(step.frameData, 0, 0);
-        }
-
-        if (step.popData && this.popOutBuffer) {
-            this.popOutBuffer.getContext("2d").putImageData(step.popData, 0, 0);
-        }
-
-        if (step.paintData && this.paintBuffer) {
-            this.paintBuffer.getContext("2d").putImageData(step.paintData, 0, 0);
-        }
-
-        this.drawAll();
-        // Force render to update toggles (like Eraser ON/OFF) if they changed
-        this.render();
+        if (!this._stepHistory(this._undoStack, this._redoStack)) ui.notifications.info(loc("NothingToUndo"));
     }
 
+    _onRedo() {
+        if (!this._stepHistory(this._redoStack, this._undoStack)) ui.notifications.info(loc("NothingToRedo"));
+    }
 
-    
+    _clearHistory() {
+        this._undoStack.length = 0;
+        this._redoStack.length = 0;
+        this._pendingChange = null;
+        this._updateUndoButtons();
+    }
+
+    _updateUndoButtons() {
+        const undo = this.element?.querySelector("[data-action='undo']");
+        const redo = this.element?.querySelector("[data-action='redo']");
+        if (undo) undo.disabled = !this._undoStack.length;
+        if (redo) redo.disabled = !this._redoStack.length;
+    }
+
+    /**
+     * Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y redo, while the studio is the active window and no text
+     * field has focus.
+     * @param {KeyboardEvent} event
+     */
+    _onKeyDown(event) {
+        if (!this.rendered || (ui.activeWindow !== this)) return;
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        const target = event.target;
+        const textInput = target.isContentEditable || (target.tagName === "TEXTAREA")
+            || ((target.tagName === "INPUT") && !["range", "checkbox", "radio", "color", "button"].includes(target.type));
+        if (textInput) return;
+        const key = event.key.toLowerCase();
+        let action = null;
+        if (key === "z") action = event.shiftKey ? "redo" : "undo";
+        else if (key === "y") action = "redo";
+        if (!action) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (action === "undo") this._onUndo();
+        else this._onRedo();
+    }
+
+    /* ------------------------------------------- */
+    /*  Brush Cursor                               */
+    /* ------------------------------------------- */
+
+    /**
+     * @param {"token"|"avatar"} view
+     * @returns {number|null} The active brush's diameter in canvas pixels, or null when no brush paints here.
+     */
+    _brushSize(view) {
+        if (view !== this.uiState.activeView) return null;
+        const s = this.uiState;
+        if (view === "token") {
+            if (s.isPaintActive) return s.paintSize;
+            if (s.isPopOutActive) return s.popOutSize;
+        }
+        if (s.isEraserActive && !s.isPopOutActive) return s.eraserSize;
+        return null;
+    }
+
+    /**
+     * Show a ring the size of the brush under the mouse.
+     * @param {MouseEvent} event
+     * @param {HTMLCanvasElement} canvas
+     * @param {"token"|"avatar"} view
+     */
+    _updateBrushCursor(event, canvas, view) {
+        const ring = this.element.querySelector(".nts-brush-cursor");
+        const stage = ring?.parentElement;
+        const size = this._brushSize(view);
+        if (!ring || !size || !canvas.width) return this._hideBrushCursor();
+        const rect = canvas.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        const diameter = size * (rect.width / canvas.width);
+        ring.style.width = ring.style.height = `${diameter}px`;
+        ring.style.left = `${event.clientX - stageRect.left}px`;
+        ring.style.top = `${event.clientY - stageRect.top}px`;
+        ring.classList.toggle("remove", this._brushRemoves(view));
+        ring.hidden = false;
+        canvas.classList.add("brush-active");
+    }
+
+    /** @returns {boolean} Whether the active brush takes something away (shown as a dashed ring). */
+    _brushRemoves(view) {
+        const s = this.uiState;
+        if ((view === "token") && s.isPaintActive) return s.paintMode === "remove";
+        if ((view === "token") && s.isPopOutActive) return s.popOutMode === "remove";
+        return s.eraserMode !== "add";
+    }
+
+    _hideBrushCursor() {
+        const ring = this.element?.querySelector(".nts-brush-cursor");
+        if (ring) ring.hidden = true;
+        this.element?.querySelectorAll("canvas.brush-active").forEach(c => c.classList.remove("brush-active"));
+    }
+
     _onUpdateFX(event, target) {
         const prop = target.name;
         const val = target.type === 'range' ? Number(target.value) : target.value;
@@ -1944,7 +2166,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         if (!this.originalImage) return;
         
         const size = this.resolution;
-        const imgMax = Math.max(this.originalImage.naturalWidth, this.originalImage.naturalHeight);
+        const { width: imgW, height: imgH } = originalSize(this.originalImage);
+        const imgMax = Math.max(imgW, imgH);
         
         // Scale to Fit Canvas (0.9 margin)
         let scale = (size / imgMax) * 0.9;
@@ -1973,14 +2196,14 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         }
         
         this.drawAll();
-        this._syncSliders();
+        this._updateTransformUI();
     }
     
     _onReset() {
         const view = this.uiState.activeView;
         this.uiState[view].transforms = { x: 0, y: 0, scale: 1, rotation: 0 };
         this.drawAll();
-        this._syncSliders();
+        this._updateTransformUI();
     }
 
 
@@ -1990,14 +2213,14 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             const FilePickerClass = filePickerClass();
             new FilePickerClass({
                 type: "image",
-                callback: (path) => {
+                callback: (path) => this._recordImageLoad(async () => {
                      this.uiState.token.frame.path = path;
                      if (!this.userFrames.includes(path)) {
                          this.userFrames.push(path);
                      }
-                     this._loadFrameImage(path);
+                     await this._loadFrameImage(path);
                      this.render(); 
-                }
+                })
             }).browse();
         } catch (err) {
             console.error(`${LOG} FilePicker Error:`, err);
@@ -2030,7 +2253,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
     async _onClearPopout(event, target) {
         if (!this.popOutBuffer) return;
-        const ctx = this.popOutBuffer.getContext("2d");
+        const ctx = this._editBuffer("popOutBuffer").getContext("2d");
         ctx.clearRect(0, 0, this.popOutBuffer.width, this.popOutBuffer.height);
         this.drawTokenSandwich();
     }
@@ -2043,13 +2266,12 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
             // 1. Upload Source if it's local (dropped/pasted)
             if (this._isLocalSource && this.originalImage) {
-                // We need to convert sourceImage (img tag) to Blob, 
-                // but since it's a DOM element, we can draw it to a temp canvas or fetch it
-                // Easiest is to re-fetch the src since it's a data URL
-                const res = await fetch(this.originalImage.src);
-                const blob = await res.blob();
-                const fileName = `source_${this.actor.id}_${Date.now()}.webp`; // Store as webp or original? Webp is safe.
-                const file = new File([blob], fileName, { type: blob.type });
+                // The art as loaded (downscaled if it was very large), saved as WebP
+                const source = (this.originalImage instanceof HTMLCanvasElement)
+                    ? this.originalImage : this._createBufferFromImage(this.originalImage);
+                const blob = await new Promise(resolve => source.toBlob(resolve, "image/webp", 0.92));
+                const fileName = `source_${this.actor.id}_${Date.now()}.webp`;
+                const file = new File([blob], fileName, { type: "image/webp" });
                 
                 const upPath = await this._uploadFile(file);
                 this.uiState.sourcePath = upPath;
@@ -2070,7 +2292,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             this.drawTokenSandwich(tempCtx, true);
 
             const blob = await new Promise(resolve => tempC.toBlob(resolve, "image/webp", 0.9));
-            const result = await this._uploadToken(blob);
+            const { path: result, fallback } = await this._uploadToken(blob);
             
             // Update Prototype & Active Tokens
             const updates = {
@@ -2141,6 +2363,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             
             // Save state but don't close
             await this.actor.setFlag(MODULE_ID, "lastState", this.uiState);
+
+            let shownPath = result;
+            try { shownPath = decodeURIComponent(result); } catch { /* keep as stored */ }
+            ui.notifications.info(loc(fallback ? "TokenSavedFallback" : "TokenSaved", { path: shownPath }));
             
         } catch (err) {
             console.error(err);
@@ -2154,16 +2380,15 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         let buffer;
         
         // Target Logic
+        let bufferKey;
         if (view === 'token') {
-             buffer = (this.uiState.activeLayer === 'background') ? this.backgroundBuffer : this.tokenBuffer;
+             bufferKey = (this.uiState.activeLayer === 'background') ? "backgroundBuffer" : "tokenBuffer";
         } else {
-             buffer = this.avatarBuffer;
+             bufferKey = "avatarBuffer";
         }
         
-        if (!buffer) return ui.notifications.warn(loc("NoImageForLayer"));
-        
-        // Save State for Undo
-        this._saveHistory();
+        if (!this[bufferKey]) return ui.notifications.warn(loc("NoImageForLayer"));
+        buffer = this._editBuffer(bufferKey);
         
         const colorInput = this.element.querySelector("#chroma-color");
         const toleranceInput = this.element.querySelector("#chroma-tolerance");
@@ -2221,6 +2446,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             
             // Update Actor Image
             await this.actor.update({ "img": result });
+            this.uiState.portrait = result; // Changed by the studio itself: keep the session's art
 
             // ui.notifications.info("Avatar Updated!");
              // Save state but don't close
@@ -2271,6 +2497,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         // Resize PopOut Buffer if it exists
         if (this.popOutBuffer) {
+             this._editBuffer("popOutBuffer");
              const oldSize = this.popOutBuffer.width;
              const newSize = Math.round(this.resolution * val);
              
@@ -2293,6 +2520,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
         // Resize Paint Buffer (Same Logic)
         if (this.paintBuffer) {
+             this._editBuffer("paintBuffer");
              const oldSize = this.paintBuffer.width;
              const newSize = Math.round(this.resolution * val);
              
@@ -2311,6 +2539,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         }
         
         this.drawToken(); 
+        this._layoutRingPreview();
     }
     
     _onToggleFoundryRing(event) {
@@ -2350,7 +2579,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
      * Upload a finished token as `<portrait name>-token-<number>.webp`, next to the actor's portrait when the
      * "Token Location" setting asks for it and that folder can be used, otherwise in the storage folder.
      * @param {Blob} blob
-     * @returns {Promise<string>} The stored path.
+     * @returns {Promise<{path: string, fallback: boolean}>} The stored path, and whether it went to the storage folder
+     *                                                       although the setting asked for the portrait's folder.
      */
     async _uploadToken(blob) {
         const portrait = this.actor.img;
@@ -2360,6 +2590,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             const nextToPortrait = parseLocation(portrait);
             if (nextToPortrait) targets.push({ target: nextToPortrait, create: false });
         }
+        const wantsPortraitFolder = game.settings.get(MODULE_ID, "tokenLocation") === "portrait";
         targets.push({ target: storageFolder(), create: true });
 
         let lastError;
@@ -2368,7 +2599,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                 if (create) await ensureFolder(target);
                 const number = await nextTokenNumber(target, base);
                 const file = new File([blob], `${base}-token-${number}.webp`, { type: "image/webp" });
-                return await uploadTo(target, file);
+                const path = await uploadTo(target, file);
+                return { path, fallback: wantsPortraitFolder && create };
             } catch (err) {
                 lastError = err;
                 console.warn(`${LOG} Could not save the token in ${target.source}:${target.path || "/"}, trying the next folder.`, err);
