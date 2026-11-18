@@ -1,5 +1,11 @@
 # Changelog
 
+## 14.2.1
+
+- **Smoother editing:** brush strokes (Eraser, Break Out, Paint), dragging layers, zooming and slider changes are 2 to 3 times faster, most of all on large tokens and with a shadow. The picture is exactly the same as before.
+- **Faster closing:** closing Token Studio without changes no longer uploads anything or updates the actor. After changes, only the layers you changed are saved, at the same time instead of one after another, and the actor is updated once.
+- **Faster Remove a Color and ring preview** on large images.
+
 ## 14.2.0
 
 - **Break Out presets:** three buttons in the Break Out tool fill the Break Out area in one click: **Top** (everything above the middle of the frame breaks out: heads, hats, horns), **Bottom** (feet, tails) and **Everything** (the whole figure sits over the frame). A preset replaces what you painted; refine it with the brush afterwards. Works best with cut-out art. Each preset can be undone.

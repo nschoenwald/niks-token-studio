@@ -18,6 +18,11 @@ const ORIGINAL_KEYS = ["originalImage", "originalFrameImage", "originalBackgroun
 /** The parts of `uiState` that describe the picture (not tool settings or which tab is open). */
 const UNDO_STATE_KEYS = ["token", "avatar", "dynamicRingScale", "useFoundryRing", "avatarAspectRatio", "hasPopOutContent", "sourcePath"];
 
+/** Draft files kept per actor: draft key → buffer property. */
+const DRAFT_BUFFERS = {
+    token: "tokenBuffer", frame: "frameBuffer", background: "backgroundBuffer", popout: "popOutBuffer", paint: "paintBuffer"
+};
+
 /** Undo keeps at most this many steps, and drops the oldest when the copied images pass the memory budget. */
 const UNDO_MAX_STEPS = 100;
 const UNDO_BYTE_BUDGET = 512 * 1024 * 1024;
@@ -163,6 +168,15 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this._undoStack = [];
         this._redoStack = [];
         this._pendingChange = null;
+
+        // Performance: redraw batching, art layer cache, scratch canvases, buffer edit counters, draft tracking
+        this._pendingDraw = null;
+        this._drawFrame = null;
+        this._artCache = null;
+        this._scratchCanvases = {};
+        this._bufferVersions = {};
+        this._pristineBuffers = new WeakSet(); // Buffers that still match their source image (no draft needed)
+        this._draftSources = {};                // Draft key → the buffer the stored draft file was made from
         
         // Initial load
         this._loadUserFrames();
@@ -250,6 +264,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
      */
     async close(options) {
         this._ringResizeObserver?.disconnect();
+        if (this._drawFrame) cancelAnimationFrame(this._drawFrame);
+        this._drawFrame = null;
         // Save Draft State (Buffers)
         await this._saveDraftState();
         
@@ -490,10 +506,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                 
                 if (name === "shadowColor") {
                     this.uiState.token.fx.shadowColor = value;
-                    this.drawAll();
+                    this._requestDraw();
                 } else if (name === "backgroundColor") {
                     this.uiState.token.fx.backgroundColor = value;
-                    this.drawAll();
+                    this._requestDraw();
                 } else if (name === "chromaColor") {
                     this.uiState.chromaColor = value;
                     this.uiState.token.chromaColor = value; // ?
@@ -621,6 +637,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         this._sessionRestored = true;
         this._clearHistory(); // Undo starts from the picture as it was when the studio opened
+        // Closing without changes then skips the actor update (compared in _saveDraftState)
+        this._savedStateJSON = JSON.stringify({ ...foundry.utils.deepClone(this.uiState), drafts: this._currentDraftPaths() });
     }
     
     _onTabClick(e) {
@@ -657,6 +675,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         // Update Canvas Highlighting
         this._updateViewVisibility(view);
+        this.drawAll(); // The hidden view isn't kept up to date
         
         // Update Sliders to match new view's transforms
         this._updateTransformUI();
@@ -881,6 +900,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const size = Math.round(this.resolution * scale);
         canvas.width = size;
         canvas.height = size;
+        this._pristineBuffers.add(canvas); // Empty
         return canvas;
     }
 
@@ -915,6 +935,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
         setSourceScale(canvas, sourceScale(img));
+        this._pristineBuffers.add(canvas); // Copies made for edits (`_editBuffer`) aren't pristine
         return canvas;
     }
 
@@ -1019,9 +1040,77 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     /*  Canvas Rendering                           */
     /* ------------------------------------------- */
 
+    /**
+     * Draw the visible view. The hidden one is drawn when it's shown (`_setActiveView`) or exported.
+     */
     drawAll() {
-        this.drawTokenSandwich();
-        this.drawAvatar();
+        if (this.uiState.activeView === "avatar") this.drawAvatar();
+        else this.drawTokenSandwich();
+    }
+
+    /**
+     * Redraw on the next animation frame. Mouse moves, wheel events and slider input can fire far more often than
+     * the screen refreshes; requests within one frame draw once.
+     * @param {object} [options]
+     * @param {boolean} [options.syncUI=false]  Also update the sliders and number fields.
+     */
+    _requestDraw({ syncUI = false } = {}) {
+        this._pendingDraw ??= { ui: false };
+        if (syncUI) this._pendingDraw.ui = true;
+        this._drawFrame ??= requestAnimationFrame(() => this._flushDraw());
+    }
+
+    /** Run a requested redraw now. */
+    _flushDraw() {
+        if (this._drawFrame) cancelAnimationFrame(this._drawFrame);
+        this._drawFrame = null;
+        const pending = this._pendingDraw;
+        this._pendingDraw = null;
+        if (!pending) return;
+        this.drawAll();
+        if (pending.ui) this._updateTransformUI();
+    }
+
+    /**
+     * A reusable full-size canvas for compositing, so redraws don't allocate new canvases.
+     * @param {string} name
+     * @param {number} size
+     * @returns {HTMLCanvasElement} Cleared, `size` × `size`.
+     */
+    _scratch(name, size) {
+        let canvas = this._scratchCanvases[name];
+        if (!canvas) canvas = this._scratchCanvases[name] = document.createElement("canvas");
+        if ((canvas.width !== size) || (canvas.height !== size)) {
+            canvas.width = size;
+            canvas.height = size;
+        }
+        else canvas.getContext("2d").clearRect(0, 0, size, size);
+        return canvas;
+    }
+
+    /** Count an in-place change to a buffer (invalidates caches built from it). */
+    _bumpBuffer(key) {
+        this._bufferVersions[key] = (this._bufferVersions[key] ?? 0) + 1;
+    }
+
+    /**
+     * The art layer with its shadow and transforms on a token-sized canvas. Rendering it (the shadow blur in
+     * particular) is the most expensive part of a redraw, so it's kept until the art, its transforms or its shadow
+     * change. Brush strokes on other layers, Break Out painting and frame or background drags reuse it.
+     * @param {number} canvasSize
+     * @returns {HTMLCanvasElement}
+     */
+    _artLayer(canvasSize) {
+        const state = this.uiState.token;
+        const { x, y, scale, rotation } = state.transforms;
+        const key = [canvasSize, this._bufferVersions.tokenBuffer ?? 0, x, y, scale, rotation,
+            state.fx.shadowBlur, state.fx.shadowColor].join("|");
+        const cache = this._artCache;
+        if (cache && (cache.key === key) && (cache.buffer === this.tokenBuffer)) return cache.canvas;
+        const canvas = this._scratch("art", canvasSize);
+        this._drawCharacter(canvas.getContext("2d"), state, canvasSize);
+        this._artCache = { key, buffer: this.tokenBuffer, canvas };
+        return canvas;
     }
     
     // Listeners for Paint Tool
@@ -1149,25 +1238,25 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             ctx.arc(cx, cy, Math.max(0, r), 0, Math.PI * 2);
             ctx.clip();
             
-            // Draw Character
+            // Draw Character (cached art layer)
+            const art = this._artLayer(canvasSize);
             const breaksOut = this.popOutBuffer && this.uiState.hasPopOutContent;
             if (breaksOut) {
                 // Leave out the Break Out areas: step 4 draws them over the frame, and drawing them twice would
                 // darken soft edges and the shadow (a visible seam along a preset's edge)
-                const artC = document.createElement("canvas");
-                artC.width = canvasSize;
-                artC.height = canvasSize;
-                const artCtx = artC.getContext("2d");
-                this._drawCharacter(artCtx, state, canvasSize);
                 if ((this.popOutBuffer.width !== canvasSize) || (this.popOutBuffer.height !== canvasSize)) {
                     this.popOutBuffer.width = canvasSize;
                     this.popOutBuffer.height = canvasSize;
                 }
-                artCtx.globalCompositeOperation = "destination-out";
-                artCtx.drawImage(this.popOutBuffer, 0, 0);
-                ctx.drawImage(artC, 0, 0);
+                const hole = this._scratch("hole", canvasSize);
+                const holeCtx = hole.getContext("2d");
+                holeCtx.drawImage(art, 0, 0);
+                holeCtx.globalCompositeOperation = "destination-out";
+                holeCtx.drawImage(this.popOutBuffer, 0, 0);
+                holeCtx.globalCompositeOperation = "source-over";
+                ctx.drawImage(hole, 0, 0);
             }
-            else this._drawCharacter(ctx, state, canvasSize);
+            else ctx.drawImage(art, 0, 0);
             
             ctx.restore();
         }
@@ -1217,23 +1306,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         if (this.tokenBuffer && this.popOutBuffer && this.uiState.hasPopOutContent) {
              ctx.save();
              
-             // Temp Canvas for Outer Character
-             const charC = document.createElement("canvas");
-             charC.width = canvasSize;
-             charC.height = canvasSize;
+             // Art layer (cached, with shadow) on a reusable scratch canvas
+             const charC = this._scratch("popout", canvasSize);
              const charCtx = charC.getContext("2d");
-             
-             // Draw Character + Shadow (Same logic as above)
-             charCtx.save();
-             if (state.fx.shadowBlur > 0) {
-                 charCtx.shadowColor = state.fx.shadowColor;
-                 charCtx.shadowBlur = state.fx.shadowBlur;
-             }
-             charCtx.translate(canvasSize/2 + state.transforms.x, canvasSize/2 + state.transforms.y);
-             charCtx.rotate((state.transforms.rotation * Math.PI) / 180);
-             charCtx.scale(state.transforms.scale, state.transforms.scale);
-             this._drawLayerBuffer(charCtx, this.tokenBuffer);
-             charCtx.restore();
+             charCtx.drawImage(this._artLayer(canvasSize), 0, 0);
              
              // Apply MASK (Destination-In) using ONLY the Brush Buffer
              charCtx.globalCompositeOperation = "destination-in";
@@ -1246,6 +1322,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              }
              
              charCtx.drawImage(this.popOutBuffer, 0, 0);
+             charCtx.globalCompositeOperation = "source-over";
              
              // Draw Result onto Main Canvas (Over Frame)
              ctx.drawImage(charC, 0, 0);
@@ -1452,7 +1529,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              ctx.fill();
              ctx.restore();
              
-             this.drawAll();
+             this._requestDraw();
              return;
         }
 
@@ -1495,7 +1572,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              ctx.restore();
              
              this.uiState.hasPopOutContent = true; // Mark as dirty
-             this.drawTokenSandwich();
+             this._requestDraw();
              return;
         }
 
@@ -1686,9 +1763,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
             ctx.restore();
 
-            // Repaint ONLY the view we erased
-            if (viewName === 'token') this.drawToken();
-            else this.drawAvatar();
+            // Repaint on the next frame (only the visible view is drawn)
+            this._requestDraw();
             
             return;
         }
@@ -1721,10 +1797,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         targetTransforms.x = this._lastTransform.x + dx;
         targetTransforms.y = this._lastTransform.y + dy;
         
-        if (view === 'token') this.drawToken();
-        else this.drawAvatar();
-        
-        this._updateTransformUI();
+        this._requestDraw({ syncUI: true });
     }
     
     _onCanvasMouseUp(event) {
@@ -1803,10 +1876,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             }
         }
         t.scale = newScale;
-
-        if (viewName === 'token') this.drawToken();
-        else this.drawAvatar();
-        this._updateTransformUI();
+        this._requestDraw({ syncUI: true });
     }
 
     _getLayerState() {
@@ -1949,7 +2019,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
 
             state.transforms[prop] = val;
             
-            this.drawAll();
+            this._requestDraw();
         } else if (["shadowBlur", "shadowColor", "backgroundColor"].includes(prop)) {
             this._onUpdateFX(event, target);
         }
@@ -2054,6 +2124,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             change.cloned.add(key);
             change.snapshot.bytes += buffer.width * buffer.height * 4;
         }
+        this._bumpBuffer(key); // The caller draws into it now
         return this[key];
     }
 
@@ -2220,7 +2291,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             if(cInput) cInput.value = val;
         }
         
-        this.drawAll();
+        this._requestDraw();
     }
 
     async _onAutoFit() {
@@ -2469,22 +2540,14 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
         
+        // Euclidean color distance, compared squared (no square root per pixel)
+        const limit = tolerance * tolerance;
         for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i+1];
-            const b = data[i+2];
-            // alpha data[i+3]
-            
-            // Simple Euclidean distance
-            const dist = Math.sqrt(
-                Math.pow(r - rTarget, 2) + 
-                Math.pow(g - gTarget, 2) + 
-                Math.pow(b - bTarget, 2)
-            );
-            
-            if (dist < tolerance) {
-                data[i+3] = 0; // Transparent
-            }
+            if (data[i + 3] === 0) continue; // Already transparent
+            const dr = data[i] - rTarget;
+            const dg = data[i + 1] - gTarget;
+            const db = data[i + 2] - bTarget;
+            if (((dr * dr) + (dg * dg) + (db * db)) < limit) data[i + 3] = 0;
         }
         
         ctx.putImageData(imageData, 0, 0);
@@ -2500,6 +2563,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         try {
             // ui.notifications.info("Updating Avatar...");
+            this.drawAvatar(); // Not redrawn while hidden
             const blob = await new Promise(resolve => this.canvasAvatar.toBlob(resolve, "image/webp", 0.9));
             const fileName = `avatar_${this.actor.id}_${Date.now()}.webp`;
             const file = new File([blob], fileName, { type: "image/webp" });
@@ -2678,113 +2742,84 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     /*  DRAFT PERSISTENCE                          */
     /* ------------------------------------------- */
 
+    /**
+     * Save the work in progress when the studio closes: the settings (`lastState`) and a WebP draft of each buffer
+     * that differs from its source image. Drafts that are still current aren't uploaded again, the rest upload in
+     * parallel, and the actor is only updated when something changed (an actor update re-renders its sheet for
+     * everyone).
+     */
     async _saveDraftState() {
         if (!this.actor) return;
-        // ui.notifications.notify("Saving Draft State..."); // Silenced
-
         try {
-            const drafts = {};
-
-            // 1. Save Token Buffer (Eraser State)
-            if (this.tokenBuffer) {
-                const blob = await new Promise(r => this.tokenBuffer.toBlob(r, "image/webp", 0.9));
-                const file = new File([blob], `draft_token_${this.actor.id}.webp`, { type: "image/webp" });
-                const path = await this._uploadFile(file);
-                drafts.token = path;
+            const previous = this.uiState.drafts ?? {};
+            // Fixed key order, so the comparison below doesn't depend on which upload finished first
+            const drafts = Object.fromEntries(Object.keys(DRAFT_BUFFERS).map(key => [key, null]));
+            const uploads = [];
+            for (const [key, bufferKey] of Object.entries(DRAFT_BUFFERS)) {
+                const buffer = this[bufferKey];
+                if (!buffer || this._pristineBuffers.has(buffer)) {
+                    drafts[key] = null; // Nothing to keep: the source image (or an empty layer) reproduces it
+                    continue;
+                }
+                if (previous[key] && (this._draftSources[key] === buffer)) {
+                    drafts[key] = previous[key]; // Unchanged since that draft was written or loaded
+                    continue;
+                }
+                uploads.push((async () => {
+                    const blob = await new Promise(r => buffer.toBlob(r, "image/webp", 0.9));
+                    const file = new File([blob], `draft_${key === "background" ? "bg" : key}_${this.actor.id}.webp`, { type: "image/webp" });
+                    drafts[key] = await this._uploadFile(file);
+                    this._draftSources[key] = buffer;
+                })());
             }
+            await Promise.all(uploads);
 
-            // 1b. Save Frame Buffer
-            if (this.frameBuffer) {
-                 const blob = await new Promise(r => this.frameBuffer.toBlob(r, "image/webp", 0.9));
-                 const file = new File([blob], `draft_frame_${this.actor.id}.webp`, { type: "image/webp" });
-                 const path = await this._uploadFile(file);
-                 drafts.frame = path;
-            }
-
-            // 1c. Save Background Buffer (New)
-            if (this.backgroundBuffer) {
-                 const blob = await new Promise(r => this.backgroundBuffer.toBlob(r, "image/webp", 0.9));
-                 const file = new File([blob], `draft_bg_${this.actor.id}.webp`, { type: "image/webp" });
-                 const path = await this._uploadFile(file);
-                 drafts.background = path;
-            }
-
-            // 2. Save PopOut Buffer (PopOut State)
-            if (this.popOutBuffer) {
-                 // Optimization: Only save if it has content? 
-                 // For now save always to clear old ones if empty.
-                 const blob = await new Promise(r => this.popOutBuffer.toBlob(r, "image/webp", 0.9));
-                 const file = new File([blob], `draft_popout_${this.actor.id}.webp`, { type: "image/webp" });
-                 const path = await this._uploadFile(file);
-                 drafts.popout = path;
-            }
-
-            // 3. Save Paint Buffer (Paint State)
-            if (this.paintBuffer && this._bufferHasContent(this.paintBuffer)) {
-                 const blob = await new Promise(r => this.paintBuffer.toBlob(r, "image/webp", 0.9));
-                 const file = new File([blob], `draft_paint_${this.actor.id}.webp`, { type: "image/webp" });
-                 const path = await this._uploadFile(file);
-                 drafts.paint = path;
-            }
-
-            // Update State
             this.uiState.drafts = drafts;
-            
-            // Save BOTH flags to ensure consistency
-            // 'drafts' stores the paths to the WEBP files
-            // 'lastState' stores the config (transforms, background path, etc)
-            const p1 = this.actor.setFlag(MODULE_ID, "drafts", this.uiState.drafts);
-            const p2 = this.actor.setFlag(MODULE_ID, "lastState", this.uiState);
-            
-            await Promise.all([p1, p2]);
-            // ui.notifications.info("Draft State Saved.");
-            
+            const lastState = foundry.utils.deepClone(this.uiState);
+            const json = JSON.stringify(lastState);
+            if (json === this._savedStateJSON) return; // Nothing changed since the studio opened or last saved
+            await this.actor.update({ [`flags.${MODULE_ID}`]: { drafts, lastState } });
+            this._savedStateJSON = json;
         } catch (err) {
             console.error(`${LOG} Failed to save draft:`, err);
         }
     }
 
+    /** @returns {object} The draft paths `_saveDraftState` would keep without uploading anything. */
+    _currentDraftPaths() {
+        const previous = this.uiState.drafts ?? {};
+        const drafts = {};
+        for (const [key, bufferKey] of Object.entries(DRAFT_BUFFERS)) {
+            const buffer = this[bufferKey];
+            drafts[key] = (buffer && !this._pristineBuffers.has(buffer) && (this._draftSources[key] === buffer)) ? (previous[key] ?? null) : null;
+        }
+        return drafts;
+    }
+
+    /**
+     * Load the drafts into the buffers (in parallel). Afterwards those buffers match their draft files.
+     */
     async _loadDraftState() {
-        if (!this.uiState.drafts) return;
-        
-        const loadBuffer = async (src, targetBuffer) => {
-            if (!src || !targetBuffer) return;
+        const drafts = this.uiState.drafts;
+        if (!drafts) return;
+        await Promise.all(Object.entries(DRAFT_BUFFERS).map(async ([key, bufferKey]) => {
+            const src = drafts[key];
+            const buffer = this[bufferKey];
+            if (!src || !buffer) return;
             try {
                 const img = await loadImage(withCacheBuster(src)); // Drafts are overwritten in place
-                
-                // Clear and Draw
-                const ctx = targetBuffer.getContext("2d");
-                ctx.clearRect(0, 0, targetBuffer.width, targetBuffer.height);
-                ctx.drawImage(img, 0, 0, targetBuffer.width, targetBuffer.height);
+                if (this[bufferKey] !== buffer) return; // Replaced meanwhile
+                const ctx = buffer.getContext("2d");
+                ctx.clearRect(0, 0, buffer.width, buffer.height);
+                ctx.drawImage(img, 0, 0, buffer.width, buffer.height);
+                this._bumpBuffer(bufferKey);
+                this._pristineBuffers.delete(buffer);
+                this._draftSources[key] = buffer;
             } catch (e) {
                 console.error(`${LOG} Failed to load draft:`, src, e);
             }
-        };
-
-        if (this.uiState.drafts.token && this.tokenBuffer) {
-            await loadBuffer(this.uiState.drafts.token, this.tokenBuffer);
-        }
-        
-        // Load Frame Draft (Must target frameBuffer, which exists if frame path exists)
-        if (this.uiState.drafts.frame && this.frameBuffer) {
-             await loadBuffer(this.uiState.drafts.frame, this.frameBuffer);
-        }
-
-        // Load Background Draft
-        if (this.uiState.drafts.background && this.backgroundBuffer) {
-             await loadBuffer(this.uiState.drafts.background, this.backgroundBuffer);
-        }
-
-        if (this.uiState.drafts.popout && this.popOutBuffer) {
-            await loadBuffer(this.uiState.drafts.popout, this.popOutBuffer);
-        }
-
-        if (this.uiState.drafts.paint && this.paintBuffer) {
-            await loadBuffer(this.uiState.drafts.paint, this.paintBuffer);
-        }
-        
+        }));
         this.drawAll();
-        // ui.notifications.notify("Draft State Restored.");
     }
     
     static async submit(event, form, formData) {

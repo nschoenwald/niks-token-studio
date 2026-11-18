@@ -119,7 +119,11 @@ function colorizeRing(canvas, color, band, mask) {
     const cx = width / 2;
     const cy = height / 2;
     const half = Math.min(width, height) / 2;
+    // Band limits as squared pixel distances (no square root per pixel)
+    const start2 = band ? (band.startRadius * half) ** 2 : 0;
+    const end2 = band ? (band.endRadius * half) ** 2 : 0;
     for (let y = 0, i = 0; y < height; y++) {
+        const dy2 = ((y + 0.5) - cy) ** 2;
         for (let x = 0; x < width; x++, i += 4) {
             if (m && m[i + 3]) {
                 // Mask: ringColor × mask red, over the ring with the mask's alpha
@@ -135,8 +139,8 @@ function colorizeRing(canvas, color, band, mask) {
                 continue;
             }
             if (!band || !d[i + 3]) continue;
-            const dist = Math.hypot((x + 0.5) - cx, (y + 0.5) - cy) / half;
-            if ((dist < band.startRadius) || (dist >= band.endRadius)) continue;
+            const dist2 = (((x + 0.5) - cx) ** 2) + dy2;
+            if ((dist2 < start2) || (dist2 >= end2)) continue;
             const red = d[i] / 255;
             d[i] = cr * red;
             d[i + 1] = cg * red;
