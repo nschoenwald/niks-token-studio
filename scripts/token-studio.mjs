@@ -27,6 +27,9 @@ const DRAFT_BUFFERS = {
 const UNDO_MAX_STEPS = 100;
 const UNDO_BYTE_BUDGET = 512 * 1024 * 1024;
 
+/** Smallest layer scale (wheel zoom and sliders). Low enough for large art fitted into the frame. */
+const MIN_LAYER_SCALE = 0.01;
+
 /** Opacity of the hidden art shown while the Break Out brush is on. */
 const BREAK_OUT_GUIDE_ALPHA = 0.35;
 
@@ -103,8 +106,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                     shadowColor: defaults.token?.fx?.shadowColor ?? "#000000",
                     backgroundColor: defaults.token?.fx?.backgroundColor || null 
                 },
-                // dynamicRingScale & useFoundryRing moved to Root
-                avatarAspectRatio: 1.0,
+                // dynamicRingScale, useFoundryRing & avatarAspectRatio live at the root
                 
                 background: {
                     active: defaults.token?.background?.active || false,
@@ -127,24 +129,25 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                     rotation: defaults.avatar?.transforms?.rotation || 0
                 },
                 fx: {
-                    shadowBlur: 0,
-                    shadowColor: "#000000",
-                    backgroundColor: null 
+                    shadowBlur: defaults.avatar?.fx?.shadowBlur ?? 0,
+                    shadowColor: defaults.avatar?.fx?.shadowColor ?? "#000000",
+                    backgroundColor: defaults.avatar?.fx?.backgroundColor || null
                 }
             },
+            avatarAspectRatio: defaults.avatarAspectRatio || 1.0,
             
             // Shared State
             frames: [], // This will be populated by _loadUserFrames
             isEraserActive: false,
-            eraserMode: "remove", // remove | add
-            eraserSize: 50, // Default Eraser Size
+            eraserMode: defaults.eraserMode ?? "remove", // remove | add
+            eraserSize: defaults.eraserSize ?? 50, // Default Eraser Size
 
             isPopOutActive: false,
-            popOutMode: "add", // add | remove
-            popOutSize: 50, // Default Pop-Out Size
+            popOutMode: defaults.popOutMode ?? "add", // add | remove
+            popOutSize: defaults.popOutSize ?? 50, // Default Pop-Out Size
             
-            chromaTolerance: 50,
-            chromaColor: "#00ff00",
+            chromaTolerance: defaults.chromaTolerance ?? 50,
+            chromaColor: defaults.chromaColor ?? "#00ff00",
             
             // Root Level Settings
             dynamicRingScale: defaults.dynamicRingScale || 1.0,
@@ -152,9 +155,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             
             // Paint Tool State
             isPaintActive: false,
-            paintMode: "add", // add | remove
-            paintSize: 20,
-            paintColor: "#ff0000",
+            paintMode: defaults.paintMode ?? "add", // add | remove
+            paintSize: defaults.paintSize ?? 20,
+            paintColor: defaults.paintColor ?? "#ff0000",
 
             // Content Flags
             hasPopOutContent: defaults.hasPopOutContent || false
@@ -201,6 +204,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         // Session Flag
         this._sessionRestored = false;
+        // The first art load keeps the position saved with the session; art without one starts fitted to the frame
+        this._keepSavedArtTransforms = !!defaults.token?.transforms;
         
         // Bindings
         this._pasteHandler = this._onPaste.bind(this);
@@ -215,9 +220,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     }
     
     /**
-     * The actor's saved session, or the parts of it that still apply when the portrait was changed outside the
-     * studio since then: the art, its position and everything painted or erased on it start fresh from the new
-     * portrait; frame, background, fill and shadow are kept.
+     * The actor's saved session. When the portrait was changed outside the studio since then, only the art itself
+     * starts fresh from the new portrait (the old art and what was erased on it are dropped); its position and
+     * zoom, the Break Out area, paint, frame, background, effects and tool settings are kept.
      * @param {Actor} actor
      * @returns {object}
      */
@@ -227,11 +232,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         const knownPortrait = saved.portrait ?? saved.sourcePath;
         if (!actor || !knownPortrait || (knownPortrait === actor.img)) return saved;
         delete saved.sourcePath;
-        delete saved.hasPopOutContent;
-        delete saved.token?.transforms;
-        delete saved.avatar?.transforms;
-        const { frame, background } = saved.drafts ?? {};
-        saved.drafts = { frame, background };
+        if (saved.drafts) saved.drafts.token = null;
         return saved;
     }
 
@@ -874,6 +875,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             // Create SEPARATE Buffers
             this.tokenBuffer = this._createBufferFromImage(img);
             this.avatarBuffer = this._createBufferFromImage(img);
+
+            // New art starts fitted inside the frame, so large images are zoomed in on rather than out of
+            if (this._keepSavedArtTransforms) this._keepSavedArtTransforms = false;
+            else Object.assign(this.uiState.token.transforms, { x: 0, y: 0, scale: this._fitArtScale() });
             
             // Initialize Pop-Out Buffer (Matches Resolution)
             if (!this.popOutBuffer) {
@@ -1891,7 +1896,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
     _zoomLayer(viewName, factor, clientX, clientY) {
         if (!Number.isFinite(factor) || (factor <= 0)) return;
         const t = this._layerTransforms(viewName);
-        const newScale = Math.min(Math.max(t.scale * factor, 0.1), 5.0);
+        const newScale = Math.min(Math.max(t.scale * factor, MIN_LAYER_SCALE), 5.0);
         const applied = newScale / t.scale;
         if (applied === 1) return;
 
@@ -2329,21 +2334,24 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this._requestDraw();
     }
 
-    async _onAutoFit() {
-        if (!this.originalImage) return;
-        
-        const size = this.resolution;
+    /**
+     * The art scale at which the art's longer side spans 90 % of the frame (or of the ring in Dynamic Token Ring
+     * mode). Used by Auto-Fit and as the starting size of new art.
+     * @param {"token"|"avatar"} [view="token"]  The avatar view ignores the frame.
+     * @returns {number}
+     */
+    _fitArtScale(view = "token") {
+        if (!this.originalImage) return 1;
         const { width: imgW, height: imgH } = originalSize(this.originalImage);
         const imgMax = Math.max(imgW, imgH);
-        
-        // Scale to Fit Canvas (0.9 margin)
-        let scale = (size / imgMax) * 0.9;
-        
-        // If Frame is present, scale to fit the FRAME (approximate)
-        if (this.frameImage) {
-            const frameScale = this.uiState.token.frame.transforms.scale || 1;
-            scale = scale * frameScale;
-        }
+        if (!imgMax) return 1;
+        const frameScale = ((view === "token") && !this.uiState.useFoundryRing) ? (this.uiState.token.frame.transforms.scale || 1) : 1;
+        return Math.max(Math.round((this.resolution / imgMax) * 0.9 * frameScale * 100) / 100, MIN_LAYER_SCALE);
+    }
+
+    async _onAutoFit() {
+        if (!this.originalImage) return;
+        const scale = this._fitArtScale(this.uiState.activeView);
         
         // Apply to CURRENT View (usually Token or Character Layer)
         const view = this.uiState.activeView;
@@ -2357,7 +2365,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
              this.uiState.token.frame.transforms.y = 0;
         } else {
              // Fit Character/Background
-             this.uiState[view].transforms.scale = parseFloat(scale.toFixed(2));
+             this.uiState[view].transforms.scale = scale;
              this.uiState[view].transforms.x = 0;
              this.uiState[view].transforms.y = 0;
         }

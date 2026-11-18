@@ -1,5 +1,11 @@
 # Changelog
 
+## 14.4.0
+
+- **New art fits the frame:** a newly loaded image now starts sized to fit inside the frame, like **Auto-Fit**, so you zoom in on large images instead of zooming out first. Reopening Token Studio keeps the zoom you left it at. Zooming and the Scale slider now go down to 0.01 for very large images.
+- **Your settings stay when the portrait changes:** if an actor's portrait was changed outside Token Studio, opening Token Studio again loads the new portrait but keeps the art's position and zoom, the Break Out area, paint, frame, background and effects. Only the areas erased on the old art are dropped.
+- **More is remembered between opens:** brush sizes and modes, the paint color, the Remove a Color settings, the portrait shape and the portrait's fill and shadow now come back too.
+
 ## 14.3.0
 
 - **See what to break out:** while the Break Out brush is on, the parts of the art hidden under the frame or outside it show faintly, so you can see what to paint over. The faint parts are only a guide and aren't saved with the token.
