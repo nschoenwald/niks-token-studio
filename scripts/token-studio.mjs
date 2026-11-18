@@ -27,6 +27,9 @@ const DRAFT_BUFFERS = {
 const UNDO_MAX_STEPS = 100;
 const UNDO_BYTE_BUDGET = 512 * 1024 * 1024;
 
+/** Opacity of the hidden art shown while the Break Out brush is on. */
+const BREAK_OUT_GUIDE_ALPHA = 0.35;
+
 /** Click actions and change handlers that change the picture and get an undo step. */
 const UNDOABLE_HANDLERS = new Set([
     "_onAutoFit", "_onRemoveFrame", "_onSelectFrame", "_onDeleteBackground", "_onRemoveBackgroundColor",
@@ -1300,6 +1303,38 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             ctx.restore();
         }
         
+        // 3.5 Break Out guide: while the Break Out brush is on, show the art hidden by the frame or outside the
+        // circle faintly, so it's clear what there is to break out (not exported)
+        if (this.uiState.isPopOutActive && this.tokenBuffer && !isExport) {
+            // Where the art is visible: the circle minus the frame's opaque pixels
+            const visible = this._scratch("ghostMask", canvasSize);
+            const vCtx = visible.getContext("2d");
+            vCtx.beginPath();
+            vCtx.arc(cx, cy, Math.max(0, r), 0, Math.PI * 2);
+            vCtx.fill();
+            if (this.frameBuffer && !usingFoundryRing) {
+                vCtx.save();
+                vCtx.globalCompositeOperation = "destination-out";
+                vCtx.translate(cx, cy);
+                vCtx.rotate((fState.transforms.rotation * Math.PI) / 180);
+                vCtx.scale(fState.transforms.scale, fState.transforms.scale);
+                vCtx.drawImage(this.frameBuffer, -size/2, -size/2, size, size);
+                vCtx.restore();
+            }
+            // The rest of the art, without the areas already broken out (step 4 draws them in full)
+            const ghost = this._scratch("ghost", canvasSize);
+            const gCtx = ghost.getContext("2d");
+            gCtx.drawImage(this._artLayer(canvasSize), 0, 0);
+            gCtx.globalCompositeOperation = "destination-out";
+            gCtx.drawImage(visible, 0, 0);
+            if (this.popOutBuffer && this.uiState.hasPopOutContent) gCtx.drawImage(this.popOutBuffer, 0, 0);
+            gCtx.globalCompositeOperation = "source-over";
+            ctx.save();
+            ctx.globalAlpha = BREAK_OUT_GUIDE_ALPHA;
+            ctx.drawImage(ghost, 0, 0);
+            ctx.restore();
+        }
+
         // 4. Character (Part 2: Pop-Out / Brush Only)
         // This draws ONLY the parts painted by the brush, ON TOP of the frame.
         // We now check uiState.hasPopOutContent to avoid running this on empty buffers

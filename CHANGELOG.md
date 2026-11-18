@@ -1,5 +1,9 @@
 # Changelog
 
+## 14.3.0
+
+- **See what to break out:** while the Break Out brush is on, the parts of the art hidden under the frame or outside it show faintly, so you can see what to paint over. The faint parts are only a guide and aren't saved with the token.
+
 ## 14.2.1
 
 - **Smoother editing:** brush strokes (Eraser, Break Out, Paint), dragging layers, zooming and slider changes are 2 to 3 times faster, most of all on large tokens and with a shadow. The picture is exactly the same as before.
