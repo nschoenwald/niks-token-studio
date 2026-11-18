@@ -1,5 +1,9 @@
 # Changelog
 
+## 14.5.0
+
+- **Token edge in the preview:** a thin, sharp border now marks where the saved token image ends, including the padding. Anything outside it is cut off, so you can see at a glance whether art that breaks out still fits. The border shows on light and dark art and over the Dynamic Token Ring preview, and isn't saved with the token.
+
 ## 14.4.0
 
 - **New art fits the frame:** a newly loaded image now starts sized to fit inside the frame, like **Auto-Fit**, so you zoom in on large images instead of zooming out first. Reopening Token Studio keeps the zoom you left it at. Zooming and the Scale slider now go down to 0.01 for very large images.

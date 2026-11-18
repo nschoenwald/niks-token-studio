@@ -12,6 +12,8 @@
     --nts-accent-hover: #ff7d29;
     --nts-accent-rgb: 255, 100, 0;
     --nts-border: #333;
+    --nts-canvas-edge: rgba(255, 255, 255, 0.85);
+    --nts-canvas-edge-contrast: rgba(0, 0, 0, 0.75);
     --nts-spacing: 12px;
     
     background: var(--nts-bg);
@@ -237,6 +239,16 @@
 .niks-token-studio .canvas-container { position: relative; }
 .niks-token-studio .canvas-container canvas#canvas-token { position: relative; z-index: 1; }
 .niks-token-studio .canvas-container.ring-mode canvas#canvas-token { box-shadow: none; }
+
+/* Hard edge where the token image (with its padding) ends: a light line with a dark line outside, so it shows on
+   light and dark art and over the ring preview. An outline doesn't change the canvas size (mouse mapping, ring layout). */
+.niks-token-studio .canvas-container canvas#canvas-token {
+    outline: 1px solid var(--nts-canvas-edge);
+    box-shadow: 0 0 0 2px var(--nts-canvas-edge-contrast), 0 0 50px rgba(0,0,0,0.8);
+}
+.niks-token-studio .canvas-container.ring-mode canvas#canvas-token {
+    box-shadow: 0 0 0 2px var(--nts-canvas-edge-contrast);
+}
 .niks-token-studio .canvas-container canvas.nts-ring-preview {
     position: absolute;
     z-index: 0;
