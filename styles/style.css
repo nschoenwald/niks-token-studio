@@ -728,14 +728,25 @@
     background: var(--nts-accent);
     color: white;
     border-color: var(--nts-accent-hover);
-    box-shadow: 0 0 10px var(--nts-accent);
+    box-shadow: 0 0 5px var(--nts-accent);
+    position: relative;
+}
+
+/* The stronger glow fades on its own layer: animating opacity avoids repainting the button every frame */
+.niks-token-studio button[data-action="toggle-popout"].active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: 0 0 15px var(--nts-accent);
+    opacity: 0;
+    pointer-events: none;
     animation: niks-token-studio-pulse 1.5s infinite;
 }
 
 @keyframes niks-token-studio-pulse {
-    0% { box-shadow: 0 0 5px var(--nts-accent); }
-    50% { box-shadow: 0 0 15px var(--nts-accent); }
-    100% { box-shadow: 0 0 5px var(--nts-accent); }
+    0%, 100% { opacity: 0; }
+    50% { opacity: 1; }
 }
 
 /* ----------------------------------------- */

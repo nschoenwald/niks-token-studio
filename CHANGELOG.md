@@ -1,5 +1,9 @@
 # Changelog
 
+## 14.5.1
+
+- **Performance:** the glowing pop-out button no longer repaints on every frame. It looks the same.
+
 ## 14.5.0
 
 - **Token edge in the preview:** a thin, sharp border now marks where the saved token image ends, including the padding. Anything outside it is cut off, so you can see at a glance whether art that breaks out still fits. The border shows on light and dark art and over the Dynamic Token Ring preview, and isn't saved with the token.
