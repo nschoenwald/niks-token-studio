@@ -1,5 +1,11 @@
 # Changelog
 
+## 14.6.0
+
+- **Frame and padding carry over:** Token Studio remembers the frame (or Dynamic Token Ring mode), its size and position, and the padding you used last. Actors you haven't opened in Token Studio yet start with them. Actors you set up before keep their own. This is remembered per user.
+- **Browsed frames stay in the list:** a frame you picked from your files now shows in the frame list again when you reopen Token Studio.
+- **No frame stays no frame:** an actor you removed the frame from no longer gets the default frame back the next time.
+
 ## 14.5.1
 
 - **Performance:** the glowing pop-out button no longer repaints on every frame. It looks the same.

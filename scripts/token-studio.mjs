@@ -77,6 +77,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         
         // State
         const defaults = QuickTokenStudio._savedSession(this.actor);
+        // Frame or ring and padding: this actor's own, else the ones this user used last on any actor
+        const lastUsed = game.settings.get(MODULE_ID, "lastTokenShape") ?? {};
+        const savedFrame = defaults.token?.frame ?? lastUsed.frame;
         
         this.uiState = {
             activeView: "token", // 'token' or 'avatar'
@@ -94,12 +97,13 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
                 },
                 frame: {
                     transforms: {
-                        x: defaults.token?.frame?.transforms?.x || 0,
-                        y: defaults.token?.frame?.transforms?.y || 0,
-                        scale: defaults.token?.frame?.transforms?.scale || 1.0,
-                        rotation: defaults.token?.frame?.transforms?.rotation || 0
+                        x: savedFrame?.transforms?.x || 0,
+                        y: savedFrame?.transforms?.y || 0,
+                        scale: savedFrame?.transforms?.scale || 1.0,
+                        rotation: savedFrame?.transforms?.rotation || 0
                     },
-                    path: defaults.token?.frame?.path || this._getDefaultFramePath()
+                    // Null means "no frame" (removed); a missing path means the default frame
+                    path: (savedFrame && ("path" in savedFrame)) ? savedFrame.path : this._getDefaultFramePath()
                 },
                 fx: {
                     shadowBlur: defaults.token?.fx?.shadowBlur ?? 0,
@@ -150,8 +154,8 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             chromaColor: defaults.chromaColor ?? "#00ff00",
             
             // Root Level Settings
-            dynamicRingScale: defaults.dynamicRingScale || 1.0,
-            useFoundryRing: defaults.useFoundryRing || false,
+            dynamicRingScale: defaults.dynamicRingScale || lastUsed.dynamicRingScale || 1.0,
+            useFoundryRing: defaults.useFoundryRing ?? lastUsed.useFoundryRing ?? false,
             
             // Paint Tool State
             isPaintActive: false,
@@ -272,6 +276,7 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this._drawFrame = null;
         // Save Draft State (Buffers)
         await this._saveDraftState();
+        await this._saveTokenShape();
         
         window.removeEventListener("paste", this._pasteHandler);
         window.removeEventListener("mousemove", this._moveHandler);
@@ -300,6 +305,10 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         if (settingsDefault && !this.userFrames.includes(settingsDefault)) {
             this.userFrames.push(settingsDefault);
         }
+
+        // A browsed frame restored from the session or from another actor
+        const current = this.uiState.token.frame.path;
+        if (current && !this.userFrames.includes(current)) this.userFrames.push(current);
     }
 
     /* ------------------------------------------- */
@@ -2825,6 +2834,26 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             this._savedStateJSON = json;
         } catch (err) {
             console.error(`${LOG} Failed to save draft:`, err);
+        }
+    }
+
+    /**
+     * Remember the frame or ring and the padding for this user, as the starting point for actors that don't have
+     * their own yet. Only written when it changed.
+     */
+    async _saveTokenShape() {
+        try {
+            const { frame } = this.uiState.token;
+            const shape = {
+                frame: { path: frame.path ?? null, transforms: { ...frame.transforms } },
+                useFoundryRing: !!this.uiState.useFoundryRing,
+                dynamicRingScale: this.uiState.dynamicRingScale || 1.0
+            };
+            const previous = game.settings.get(MODULE_ID, "lastTokenShape") ?? {};
+            if (JSON.stringify(previous) === JSON.stringify(shape)) return;
+            await game.settings.set(MODULE_ID, "lastTokenShape", shape);
+        } catch (err) {
+            console.error(`${LOG} Failed to remember the frame and padding:`, err);
         }
     }
 

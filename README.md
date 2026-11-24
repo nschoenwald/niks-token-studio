@@ -56,7 +56,7 @@ Open an actor's sheet, click the **⋮** button in the window header and choose 
 - New art starts fitted inside the frame (its longer side spans 90 % of it, like **Auto-Fit**), so you zoom in on large images instead of out of them.
 - Very large images are scaled down when they're loaded, to at most 4 times the token resolution on the longer side (2048 px at the default 512 px). That's twice the largest token Token Studio saves, so the editor stays fast while zooming in still looks sharp.
 - Images from S3 or another file host work as long as that host allows cross-origin (CORS) requests from your Foundry server. If it doesn't, Token Studio tells you which host refused the image.
-- Your work in progress is kept per actor and comes back the next time you open Token Studio for that actor: positions and zoom, erased, painted and Break Out areas, frame, background, effects, padding, portrait shape and brush settings. If the actor's portrait was changed outside Token Studio in the meantime, Token Studio loads the new portrait and keeps everything else; only the areas erased on the old art are dropped.
+- Your work in progress is kept per actor and comes back the next time you open Token Studio for that actor: positions and zoom, erased, painted and Break Out areas, frame, background, effects, padding, portrait shape and brush settings. Your frame (or Dynamic Token Ring mode) and padding also carry over to actors you haven't used Token Studio on yet: they start with the ones you used last. Actors with their own keep theirs. If the actor's portrait was changed outside Token Studio in the meantime, Token Studio loads the new portrait and keeps everything else; only the areas erased on the old art are dropped.
 
 ## Settings
 

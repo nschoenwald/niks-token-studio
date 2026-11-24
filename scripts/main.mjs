@@ -42,6 +42,14 @@ Hooks.once("init", () => {
         default: 512
     });
 
+    // Frame or ring and padding used last, for actors without their own (set when Token Studio closes)
+    game.settings.register(MODULE_ID, "lastTokenShape", {
+        scope: "user",
+        config: false,
+        type: Object,
+        default: {}
+    });
+
     game.settings.register(MODULE_ID, "defaultFrame", {
         name: `${MODULE_ID}.settings.defaultFrame.Name`,
         hint: `${MODULE_ID}.settings.defaultFrame.Hint`,
