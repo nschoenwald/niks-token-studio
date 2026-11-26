@@ -351,11 +351,14 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         // Manual Event Listeners
         this._attachEventListeners();
 
-        // Dynamic Token Ring preview: keep the overlay on the token canvas when the window or canvas resizes
+        // Dynamic Token Ring preview: keep the overlay on the token canvas when the window or canvas resizes.
+        // The container is watched too: when the window changes width or height only, the canvas often keeps its
+        // size and just moves (it's centred), so watching the canvas alone left the ring behind.
         this._ringResizeObserver?.disconnect();
         if (this.canvasToken) {
             this._ringResizeObserver = new ResizeObserver(() => this._layoutRingPreview());
             this._ringResizeObserver.observe(this.canvasToken);
+            if (this.canvasToken.parentElement) this._ringResizeObserver.observe(this.canvasToken.parentElement);
         }
         this._updateRingPreview();
     }
@@ -1508,6 +1511,11 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
         this._isDragging = true;
         this._activeDragView = viewName;
         this._dragStart = { x: event.clientX, y: event.clientY };
+        // Layer positions are in canvas pixels, the mouse moves in screen pixels: the preview is usually shown
+        // smaller than the canvas, so a drag is scaled to keep the art under the cursor
+        const canvas = event.currentTarget;
+        const shown = canvas?.getBoundingClientRect?.();
+        this._dragScale = (shown?.width && shown?.height) ? { x: canvas.width / shown.width, y: canvas.height / shown.height } : { x: 1, y: 1 };
         
         // Everything until the mouse is released (a brush stroke or a drag) is one undo step
         this._beginChange();
@@ -1840,8 +1848,9 @@ export class QuickTokenStudio extends HandlebarsApplicationMixin(ApplicationV2) 
             targetTransforms = this.uiState[view].transforms;
         }
 
-        const dx = event.clientX - this._dragStart.x;
-        const dy = event.clientY - this._dragStart.y;
+        const scale = this._dragScale ?? { x: 1, y: 1 };
+        const dx = (event.clientX - this._dragStart.x) * scale.x;
+        const dy = (event.clientY - this._dragStart.y) * scale.y;
         
         targetTransforms.x = this._lastTransform.x + dx;
         targetTransforms.y = this._lastTransform.y + dy;

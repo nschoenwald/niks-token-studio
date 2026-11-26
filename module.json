@@ -2,7 +2,7 @@
   "id": "niks-token-studio",
   "title": "Nik's Token Studio",
   "description": "Turn any portrait into a framed token or a cropped avatar right inside Foundry: position, scale and rotate the art, pick a frame, erase backgrounds, let parts of the art break out of the frame, and save straight to the actor.",
-  "version": "14.6.0",
+  "version": "14.6.1",
   "compatibility": {
     "minimum": "14",
     "verified": "14",

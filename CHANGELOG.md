@@ -1,5 +1,10 @@
 # Changelog
 
+## 14.6.1
+
+- **Ring preview stays in place when resizing:** in Dynamic Token Ring mode, making the Token Studio window wider or narrower could leave the ring preview behind, so the art looked shifted inside the ring. The ring now follows the preview. The saved token was never affected.
+- **Dragging follows the mouse:** dragging the art, frame or background now moves it exactly as far as the mouse. Before, it lagged behind whenever the preview was shown smaller than the token, which is most of the time (about half as far at the default window size).
+
 ## 14.6.0
 
 - **Frame and padding carry over:** Token Studio remembers the frame (or Dynamic Token Ring mode), its size and position, and the padding you used last. Actors you haven't opened in Token Studio yet start with them. Actors you set up before keep their own. This is remembered per user.
